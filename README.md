@@ -132,6 +132,16 @@ Host tools: `uv`, `bun`, `just`, and ssh access to exe.dev
 
 ## Use
 
+**Run everything below from the sssf-sbx clone root** — the directory
+containing this README and the `justfile`. That is where `dotenv-load` finds
+`.env`, where `SSSF_CONFIG` roster paths resolve, and what "repo root" means
+in every phase. In **toolbelt** mode that root is your sssf-sbx checkout;
+your app repo is a different repo and nothing here runs from it — `mount`
+clones your app from GitHub into the VM at `~/app/target`, and a local clone
+of your app is optional, only for host-side work. In **vendored** mode the
+kernel directories live inside your app repo, so the two roots are the same
+directory.
+
 The loop — mount, execute, watch, harvest, tear down:
 
 ```sh
