@@ -29,4 +29,21 @@ doctor:
     chk "provisioner present"              '[ -x sandbox_mount/guest/provision.sh ]'
     chk "roster provider keys set"         'sandbox_mount/host/roster_keys.sh'
     chk "adw layer resolves"               'just --list adw'
+
+    # ── arming visibility, NOT a gate: an unarmed kernel is a legitimate state,
+    # but it must not be invisible — that is exactly how the late-failure defect
+    # hid. Same roster parse as mount's preflight / fill. Target mode (app.repo
+    # set) has nothing local to check. Never touches `ok`, so doctor still exits 0.
+    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+    APP_REPO=$(awk '/^app:[[:space:]]*$/ { a=1; next } /^[^[:space:]]/ { a=0 } a && /^[[:space:]]+repo:[[:space:]]/ { print $2; exit }' "$ROSTER")
+    APP_PATH=$(awk '/^app:[[:space:]]*$/ { a=1; next } /^[^[:space:]]/ { a=0 } a && /^[[:space:]]+path:[[:space:]]/ { print $2; exit }' "$ROSTER")
+    if [ -z "$APP_REPO" ]; then
+        APP_PATH="${APP_PATH:-apps/inkwell}"
+        if [ ! -d "$APP_PATH" ]; then
+            printf '  WARN  app.path %s missing in this repo — kernel is UNARMED: write %s/sssf.app.yaml, or set app.repo: in your roster (README -> Arming)\n' "$APP_PATH" "$APP_PATH"
+        else
+            printf '  ok    app.path %s present (armed)\n' "$APP_PATH"
+        fi
+    fi
+
     [ "$ok" -eq 0 ] && echo "  sbx doctor: OK" || { echo "  sbx doctor: FAILED"; exit 1; }

@@ -203,6 +203,11 @@ rm -f "$APP_PROBE"
 eval "$APP_ENV"
 
 APP_DIR="$REPO_ROOT/$APP_PATH"
+# Defensive backstop, now unreachable in normal flow: mount's HOST-SIDE arming
+# preflight (just/sandbox/mount.just) fails in seconds on a missing vendored
+# app.path long before any VM exists. This exit only fires for out-of-band
+# invocation (someone piping provision.sh to a VM directly, or a hand-shipped
+# roster that diverged from the host's).
 if [[ ! -d "$APP_DIR" ]]; then
   echo "[provision] app.path '$APP_PATH' does not exist under $REPO_ROOT" >&2
   exit 1
