@@ -99,7 +99,7 @@ install:
 build:
   - bun run build
 serve:
-  command: bun run server.ts
+  command: bun --hot server.ts  # --hot: live reload — Bun re-imports the module graph without restarting the server
   port: 4501
   health_path: /
 checks:
@@ -141,6 +141,22 @@ clones your app from GitHub into the VM at `~/app/target`, and a local clone
 of your app is optional, only for host-side work. In **vendored** mode the
 kernel directories live inside your app repo, so the two roots are the same
 directory.
+
+**Lane mental model** — users conflate steering with the factory; keep them
+separate:
+
+- **`just sbx run agent` / `just sbx run cmd`** — steering and inspection.
+  `run agent` is ONE pi turn inside the box: no chains, no gates, no commits —
+  its edits stay uncommitted working-tree changes.
+- **`just sbx lifecycle execute`** — the factory: the full SDLC with gates,
+  reviews, and commits to the target's run branch.
+- **`just sbx manage harvest`** — bringing the run's commits home.
+- **`just sbx mount` / `just sbx lifecycle teardown`** — the only times a
+  sandbox is created or destroyed. A fresh mount is for a clean box, never
+  needed just to test a change.
+
+The app process starts once at `observe` and does not hot-reload unless the
+app's own manifest opts in (see the serve example below).
 
 The loop — mount, execute, watch, harvest, tear down:
 
