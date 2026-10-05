@@ -43,6 +43,7 @@ RUNS_DIR = REPO_ROOT / ".sandbox" / "runs"
 FIELDS = (
     "run_id",
     "vm_name",
+    "tag",
     "https_url",
     "session_id",
     "commit_sha",

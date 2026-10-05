@@ -10,8 +10,8 @@
 # Nothing here ever destroys a VM. Failures stop and print the teardown command;
 # the box stays alive so it can be inspected.
 
-# boot a VM for one run: just sbx lifecycle create <task-or-run-id>
-create RUN_ID:
+# boot a VM for one run: just sbx lifecycle create <task-or-run-id> [tag]
+create RUN_ID TAG='':
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -52,11 +52,35 @@ create RUN_ID:
     }
     trap _on_exit EXIT
 
+    # ── 2b. the tag ────────────────────────────────────────────────────────────
+    # Bulk identification/cleanup filters on this, so it names the APP, not the
+    # kernel's ancestor. Explicit arg wins; else derive from the ACTIVE roster's
+    # app.repo basename; vendored (no repo:) -> "sssf". Same env var + fallback and
+    # same app: block awk as mount/fill/teardown (a module hides the root `config`).
+    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+    TAG="{{TAG}}"
+    if [ -z "$TAG" ] && [ -f "$ROSTER" ]; then
+        APP_REPO=$(awk '
+          /^app:[[:space:]]*$/      { a=1; next }
+          /^[^[:space:]]/           { a=0 }
+          a && /^[[:space:]]+repo:[[:space:]]/ { print $2; exit }
+        ' "$ROSTER" 2>/dev/null || true)
+        if [ -n "$APP_REPO" ]; then
+            base="${APP_REPO##*/}"; base="${base%.git}"   # .../hello-server.git -> hello-server
+            TAG="$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]' \
+                   | sed -e 's/[^a-z0-9-]\+/-/g' -e 's/^-//' -e 's/-$//')"
+            TAG="${TAG:0:32}"; TAG="${TAG%-}"             # cap, then re-trim a cut dash
+        fi
+    fi
+    [ -n "$TAG" ] || TAG=sssf
+    "$RR" set "$RUN_ID" tag="$TAG"
+    echo "tag:     $TAG"
+
     # ── 3. the VM ──────────────────────────────────────────────────────────────
-    # Control plane is plain ssh; --json makes it scriptable. --tag inkwell is
-    # what bulk cleanup filters on.
-    echo "vm:      creating $RUN_ID (ssh exe.dev new --tag inkwell) ..."
-    VM_JSON="$(ssh exe.dev new --name "$RUN_ID" --tag inkwell --json)"
+    # Control plane is plain ssh; --json makes it scriptable. --tag is what bulk
+    # cleanup filters on — the APP this run mounts, resolved above.
+    echo "vm:      creating $RUN_ID (tag $TAG) ..."
+    VM_JSON="$(ssh exe.dev new --name "$RUN_ID" --tag "$TAG" --json)"
 
     # The exact key names of `new --json` are UNVERIFIED (only `ls --json` was
     # observed: {"vms":[{vm_name,https_url,ssh_dest,...}]}). Accept the shapes we
@@ -96,7 +120,41 @@ create RUN_ID:
     [ -n "${HTTPS_URL:-}" ] || HTTPS_URL="https://${VM_NAME}.exe.xyz"
 
     "$RR" set "$RUN_ID" vm_name="$VM_NAME" https_url="$HTTPS_URL"
-    echo "vm:      $VM_NAME  ->  $HTTPS_URL"
+
+    # ── 3b. did the tag land? ──────────────────────────────────────────────────
+    # `new --json`'s key names are UNVERIFIED; `ls --json` demonstrably carries
+    # "tags". Trust the create payload when it names the tag, otherwise re-read the
+    # one shape that is verified. A missing tag is FATAL: the tag's only job is bulk
+    # cleanup, and a silent miss is a VM no cleanup pass will ever find.
+    TAGS="$(printf '%s' "$VM_JSON" | python3 -c '
+    import json, sys
+    try:
+        d = json.loads(sys.stdin.read())
+    except ValueError:
+        d = {}
+    if isinstance(d, dict) and isinstance(d.get("vm"), dict):
+        d = d["vm"]
+    if isinstance(d, dict) and isinstance(d.get("vms"), list) and d["vms"]:
+        d = d["vms"][0]
+    if not isinstance(d, dict):
+        d = {}
+    print(" ".join(d.get("tags") or []))
+    ')"
+    if ! printf ' %s ' "$TAGS" | grep -qF " $TAG "; then
+        TAGS="$(ssh exe.dev ls "$VM_NAME" --json | python3 -c '
+    import json, sys
+    want = sys.argv[1]
+    vms = (json.load(sys.stdin) or {}).get("vms") or []
+    hit = next((v for v in vms if v.get("vm_name") == want), {})
+    print(" ".join(hit.get("tags") or []))
+    ' "$VM_NAME")"
+    fi
+    case " $TAGS " in
+        *" $TAG "*) echo "tag:     $TAG confirmed on $VM_NAME (tags: $TAGS)" ;;
+        *) echo "create: tag '$TAG' did not land on $VM_NAME (reported: ${TAGS:-<none>})" >&2; exit 1 ;;
+    esac
+
+    echo "vm:      $VM_NAME  ->  $HTTPS_URL  (tag $TAG)"
 
     # ── 4. wait for ssh ────────────────────────────────────────────────────────
     # All *.exe.xyz share one host key and the wildcard known_hosts entry is

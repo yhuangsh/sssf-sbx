@@ -10,7 +10,8 @@
 # design: teardown is ALWAYS an explicit separate decision, never chained. The
 # preflight gates the chain on the host: a mis-armed roster fails in seconds,
 # before any VM exists, instead of at provision step 5/9 inside the VM.
-mount RUN_ID:
+# Optional second arg = the VM tag; empty derives the app name in create.
+mount RUN_ID TAG='':
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -40,7 +41,7 @@ mount RUN_ID:
         fi
     fi
 
-    just sbx lifecycle create "{{RUN_ID}}"
+    just sbx lifecycle create "{{RUN_ID}}" "{{TAG}}"
     ID=$(sandbox_mount/host/run_record.py list | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["run_id"])')
     just sbx lifecycle fill    "$ID"
     just sbx lifecycle setup   "$ID"
