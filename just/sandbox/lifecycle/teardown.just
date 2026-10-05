@@ -95,20 +95,52 @@ teardown RUN_ID *FLAGS:
     if [ "$VM_ALIVE" = 1 ]; then echo "   vm:  $VM (running)"; else echo "   vm:  ${VM:-<none>} (gone or never created)"; fi
 
     # ── 1. artifacts ------------------------------------------------------------
+    # WHY a DELTA tar instead of the whole tree: the previous command here
+    # (`tar cf - $TAR_PATHS`, uncompressed) shipped EVERY byte of specs/ and
+    # app_docs/ — MEASURED 9.95MB on a real box whose run changed nothing in the
+    # factory tree. Over that box's dal-region link (~16KB/s) that is ~10 minutes
+    # of teardown spent transferring bytes the host ALREADY owns: it cloned the
+    # same sha and mount gate A asserts the factory tree was clean before the run,
+    # so every tracked-and-unmodified byte is reconstructible here by construction.
+    # The only unique bytes are the run-delta under the tar paths (untracked
+    # non-ignored + HEAD-modified files — MEASURED ZERO files on that box) plus the
+    # gitignored always-files git cannot report (sssf.db, traced to 56KB, run.log,
+    # target manifest). Send just those, gzip the tiny payload, and skip the
+    # transfer entirely when the delta is empty.
     if [ "$VM_ALIVE" = 1 ]; then
         mkdir -p "$ART"
         TAR_TMP=$(mktemp "${TMPDIR:-/tmp}/sbx-$RUN_ID.XXXXXX")
-        # One round trip, and `ls -d` filters to what actually exists so a run that
-        # died before writing app_docs/ (or before the target clone) is not an error.
-        ssh "${SSH_OPTS[@]}" "$VM".exe.xyz \
-            "cd app 2>/dev/null || exit 0; P=\$(ls -d $TAR_PATHS 2>/dev/null); [ -z \"\$P\" ] && exit 0; tar cf - \$P" \
+        # One round trip. $TAR_PATHS expands on the HOST and is passed as argv;
+        # ssh does not pass argv (it joins args into one string the remote login
+        # shell re-parses), so the space-separated list arrives as MANY positional
+        # args and is rejoined with "$*" — $1 alone would silently be just "specs".
+        # Everything else stays literal on the VM (heredoc — no quote gymnastics).
+        # `--diff-filter=d` drops DELETED files: they have no bytes to ship and
+        # would make `tar -T` fail on a name that does not exist. Iterating the tar
+        # paths with `[ -f ]` picks up the gitignored always-files and skips the
+        # two directories. An empty list prints the sentinel to STDERR (stdout is
+        # the tar stream) and exits 0 with empty stdout; the host then skips the
+        # transfer but the artifacts dir stays created. git in a weird state (no
+        # HEAD, corrupt index) degrades to the always-files rather than failing.
+        ssh "${SSH_OPTS[@]}" "$VM".exe.xyz bash -s -- "$TAR_PATHS" <<'REMOTE' \
             > "$TAR_TMP" || true
-        if [ -s "$TAR_TMP" ]; then
-            tar xf "$TAR_TMP" -C "$ART"
-            echo "   artifacts -> $ART"
+        set -uo pipefail
+        paths="$*"; cd app 2> /dev/null || exit 0
+        list=$(mktemp)
+        { git ls-files --others --exclude-standard -- $paths 2> /dev/null
+          git diff --name-only --diff-filter=d HEAD -- $paths 2> /dev/null; } >> "$list"
+        for f in $paths; do [ -f "$f" ] && echo "$f" >> "$list"; done
+        sort -u -o "$list" "$list"
+        if [ -s "$list" ]; then
+            tar czf - -T "$list"
         else
-            echo "   artifacts: none found on the vm"
-            rmdir "$ART" 2> /dev/null || true   # do not leave an empty dir implying we pulled something
+            echo "no run artifacts to pull — factory tree unchanged" >&2
+        fi
+        rm -f "$list"
+    REMOTE
+        if [ -s "$TAR_TMP" ]; then
+            tar xzf "$TAR_TMP" -C "$ART"
+            echo "   artifacts -> $ART"
         fi
         rm -f "$TAR_TMP"
     else
