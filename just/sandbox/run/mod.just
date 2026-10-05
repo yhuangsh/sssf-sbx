@@ -39,7 +39,9 @@ cmd RUN_ID +CMD:
     # {{CMD}} is interpolated verbatim rather than rebuilt from "$@" on purpose:
     # this is an escape hatch, so the pipes, globs and quotes you typed are meant
     # to reach the remote shell intact. `cd app` matches where FILL clones.
-    ssh "$VM".exe.xyz "cd app && {{CMD}}"
+    # < /dev/null: any remote command that reads stdin would otherwise hang the
+    # ssh session open on an interactive host TTY. stdout still streams locally.
+    ssh "$VM".exe.xyz "cd app && {{CMD}}" < /dev/null
 
 # usage: just sbx run agent <run-id> "remember the number 42, reply STORED"
 #        just sbx run agent <run-id> "what number did I ask you to remember?"
@@ -64,4 +66,7 @@ agent RUN_ID PROMPT:
     # sentinel (`--session-id` vs `--resume`) is gone entirely. Synchronous by
     # design: the whole point is to read the reply and send the next turn.
     echo "→ run agent {{RUN_ID}} on $VM: pi session $SID"
-    ssh "$VM".exe.xyz "cd app && if [ -f .env ]; then set -a; . ./.env; set +a; fi; pi -p --session-id $SID $Q"
+    # < /dev/null: pi -p ignores stdin but needs EOF to exit; an interactive host
+    # TTY otherwise pins the ssh session open after the turn completes (stdout
+    # keeps streaming locally — the lane stays synchronous by design).
+    ssh "$VM".exe.xyz "cd app && if [ -f .env ]; then set -a; . ./.env; set +a; fi; pi -p --session-id $SID $Q" < /dev/null
