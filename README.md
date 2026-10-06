@@ -255,3 +255,35 @@ sandbox holds no git credential, which is why `harvest` moves commits as a
 bundle rather than a push. Other useful entries: `just sbx manage list` (all
 runs + VM liveness), `just sbx run agent <run-id> "<prompt>"` (a resumable pi
 session inside the box), and `just obs rosters` to see who is in which roster.
+
+### Orchestrator
+
+Boot a host-side orchestrator session that drives the phases above. The
+**roster argument is mandatory** — the roster is the per-app input, so the
+session is **focused** on the app it names:
+
+```sh
+# Claude Code
+just sbx orch cc adws/adw_sssf_config/sssf.hello.config.yaml
+# pi
+just sbx orch pi adws/adw_sssf_config/sssf.hello.config.yaml
+```
+
+The boot validates the file (a missing one fails with `[orch] roster file
+'<path>' not found` before anything launches), resolves it to an absolute path,
+**exports `SSSF_CONFIG`** into the agent's environment — so every
+roster-consuming command the session runs hits *that* roster, the explicit
+argument overriding any `.env` value — and prints the roster's `app.repo` and
+`app.path`. "Focus" means the whole session targets that app: orient on its
+`app:` block and manifest first, then mount, develop via `just sbx lifecycle
+execute`, steer with `just sbx run agent`, harvest, and (when the human decides)
+teardown.
+
+**Resume:**
+
+- **pi** — re-run the same command. The recipe derives a deterministic session
+  id from the roster basename (`sssf.hello.config.yaml` → `orch-hello`) and
+  passes it via `--session-id`, which creates-or-continues, so you land back in
+  the same orchestrator context.
+- **cc** — `claude --dangerously-skip-permissions --continue` from this repo
+  root continues the most recent orchestrator conversation.

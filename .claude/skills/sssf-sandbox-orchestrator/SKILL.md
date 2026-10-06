@@ -44,6 +44,10 @@ in-sandbox phases read the per-sandbox copy `fill` shipped to `/home/exedev/sssf
 carries no environment), with an optional `CONFIG` argument to override. `README.md → "Which commands
 need SSSF_CONFIG"` has the full table; the list above is its summary.
 
+`just sbx orch cc <roster>` / `just sbx orch pi <roster>` **export `SSSF_CONFIG` for the whole
+orchestrator session** — every roster-consuming command above then hits that roster, the explicit
+argument winning over any `.env` value.
+
 ## Dependencies
 
 This skill **references this repo's own sources** rather than duplicating them. They move without
@@ -133,7 +137,7 @@ just sbx
 ├── lifecycle          the six phases, for when you need one on its own
 ├── manage             preflight, readback, fleet ops — nothing here is a phase
 ├── run                put work in / look inside: `run cmd`, `run agent`
-└── orch               boot a host-side orchestrator: `orch cc`, `orch pi`
+└── orch               boot a host-side orchestrator: `orch cc <roster>`, `orch pi <roster>`
 ```
 
 `just sbx`, `just sbx lifecycle`, `just sbx manage`, `just sbx run` and `just sbx orch` each list
@@ -169,6 +173,7 @@ A failure **reports, stops, and leaves the VM alive**.
 | Activity | When to read | File |
 |---|---|---|
 | Understand the recipes before running any | first time, or when a recipe surprises you | [cookbooks/just_command_model.md](cookbooks/just_command_model.md) |
+| Orient on the app this roster names | booted via `just sbx orch cc\|pi <roster>`; the first move in any orchestrator session | [cookbooks/focus_on_app.md](cookbooks/focus_on_app.md) |
 | Stand up one sandbox end to end | "mount a sandbox", "run this in a sandbox" | [cookbooks/mount_one.md](cookbooks/mount_one.md) |
 | Put work into a mounted box | "build X in there", "ask the agent", picking `run cmd` vs `lifecycle execute` vs `run agent` | [cookbooks/execute_work.md](cookbooks/execute_work.md) |
 | Watch a run and report it back | "check on the run", "is it done", "show me the URLs" | [cookbooks/observe_and_report.md](cookbooks/observe_and_report.md) |

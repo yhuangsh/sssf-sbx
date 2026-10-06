@@ -11,7 +11,7 @@ laptop** and the factory running **in a throwaway VM**, and the two commands loo
 |---|---|---|
 | Files | `just/sandbox/` (`mount.just`, `lifecycle/`, `manage/`, `run/`, `orch/`) | `just/adws.just` |
 | Wired by | `mod sbx 'just/sandbox/mod.just'` | `mod adw 'just/adws.just'` |
-| Namespace | `sbx` has `mount` at the top level plus the `lifecycle` / `manage` / `run` / `orch` submodules: `just sbx mount`, `just sbx lifecycle create`, `just sbx lifecycle fill`, `just sbx lifecycle setup`, `just sbx lifecycle execute`, `just sbx lifecycle observe`, `just sbx lifecycle teardown`, `just sbx run cmd`, `just sbx run agent`, `just sbx manage doctor`, `just sbx manage list`, `just sbx manage harvest` | prefixed: `just adw sdlc`, `just adw scout`, … |
+| Namespace | `sbx` has `mount` at the top level plus the `lifecycle` / `manage` / `run` / `orch` submodules: `just sbx mount`, `just sbx lifecycle create`, `just sbx lifecycle fill`, `just sbx lifecycle setup`, `just sbx lifecycle execute`, `just sbx lifecycle observe`, `just sbx lifecycle teardown`, `just sbx run cmd`, `just sbx run agent`, `just sbx manage doctor`, `just sbx manage list`, `just sbx manage harvest`, `just sbx orch cc <roster>`, `just sbx orch pi <roster>` | prefixed: `just adw sdlc`, `just adw scout`, … |
 | Runs where | your machine | the VM (and, dangerously, your machine too) |
 | Credential | the exe.dev account (host-only; never leaves the host) | the allowlisted LLM provider keys FILL ships into `app/.env` (+ optional `APP_REPO_GIT_TOKEN`) |
 
