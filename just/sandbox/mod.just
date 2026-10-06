@@ -18,6 +18,7 @@
 #   just sbx lifecycle    the six phases the chain is made of
 #   just sbx manage       auxiliary: preflight, readback, fleet ops
 #   just sbx run          put work in / look at a box: `run agent`, `run cmd`
+#   just sbx orch         boot a host-side orchestrator agent
 set working-directory := '../..'
 set positional-arguments
 set dotenv-load
@@ -25,6 +26,7 @@ set dotenv-load
 mod lifecycle
 mod manage
 mod run
+mod orch
 
 import 'mount.just'
 
