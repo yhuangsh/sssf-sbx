@@ -39,6 +39,10 @@ teardown RUN_ID *FLAGS:
             *) echo "teardown: unknown flag $a (only --no-harvest)"; exit 2 ;;
         esac
     done
+    # SSSF_CONFIG is REQUIRED and is resolved BEFORE the run-record check, so an
+    # unarmed kernel fails with THE named error ("SSSF_CONFIG is not set …"), not
+    # with "no run record". The app: block below picks the artifact set from it.
+    ROSTER=$(sandbox_mount/host/require_sssf_config.sh)
     # All *.exe.xyz share one host key and a wildcard known_hosts entry is already
     # installed, so no StrictHostKeyChecking games. BatchMode so a teardown never
     # sits at a password prompt; timeouts so it never hangs on a dead VM.
@@ -53,11 +57,11 @@ teardown RUN_ID *FLAGS:
     CLOSED=$("$RR" get "$RUN_ID" closed_at)
     [ -n "$CLOSED" ] && echo "   (record already closed at $CLOSED — re-running the remaining steps)"
 
-    # Which payload the run used: the roster's app block (same awk as FILL). In
+    # Which payload the run used: the roster's app block (same awk as FILL), from
+    # the roster resolved (and required) at the top of this recipe. In
     # target mode the manifest of the target clone is added to the tar set below;
     # the target's CODE returns via the harvest bundle, but the manifest records
     # exactly what the box ran, so it comes along with the factory-root state.
-    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
     APP_REPO=$(awk '
       /^app:[[:space:]]*$/      { a=1; next }
       /^[^[:space:]]/           { a=0 }

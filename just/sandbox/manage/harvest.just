@@ -52,8 +52,9 @@ harvest RUN_ID:
     # Which repo the run committed to: the roster's app block decides (same awk
     # as FILL). `app.repo` set means target mode — the branch lives on the target
     # clone at app/<path> and the base commit is NOT in the factory repo; empty
-    # means vendored mode, today's `cd app`.
-    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+    # means vendored mode, today's `cd app`. SSSF_CONFIG is REQUIRED (shared guard,
+    # THE named error) — the app block it names picks the bundle's repo.
+    ROSTER=$(sandbox_mount/host/require_sssf_config.sh)
     APP_REPO=$(awk '
       /^app:[[:space:]]*$/      { a=1; next }
       /^[^[:space:]]/           { a=0 }

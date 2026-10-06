@@ -9,8 +9,9 @@ set shell := ["zsh", "-ic"]
 
 export SHELL_SESSIONS_DISABLE := "1"
 
-# default config every run uses — override: SSSF_CONFIG=other.yaml just adw sdlc "..."  (or pass --config in args)
-config := env_var_or_default("SSSF_CONFIG", "adws/adw_sssf_config/sssf.config.yaml")
+# SSSF_CONFIG is REQUIRED — there is no default roster. Each consuming module
+# enforces it (see sandbox_mount/host/require_sssf_config.sh); the module's own
+# `config` variable would be invisible here anyway, so there is none at the root.
 
 # Two layers, deliberately separate:
 #   `mod adw` — IN-sandbox execution: the ADWs themselves; identical whether run

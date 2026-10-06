@@ -16,7 +16,7 @@
 #   just/sandbox/lifecycle/fill.just   fail fast before shipping app/.env
 #   just/sandbox/manage/mod.just       `doctor` preflight (dotenv-load supplies env)
 #
-# Usage: roster_keys.sh [roster-path]   (default: $SSSF_CONFIG, else the default roster)
+# Usage: roster_keys.sh [roster-path]   (default: $SSSF_CONFIG — REQUIRED, no fallback)
 set -euo pipefail
 
 key_var_for() {
@@ -43,7 +43,13 @@ key_var_for() {
     esac
 }
 
-ROSTER="${1:-${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}}"
+ROSTER="${1:-}"
+# No fallback roster: with no explicit argument, $SSSF_CONFIG is REQUIRED and the
+# shared guard prints THE named error. Explicit-arg callers (FILL passes "$ROSTER")
+# are unchanged.
+if [ -z "$ROSTER" ]; then
+    ROSTER=$("$(dirname "$0")/require_sssf_config.sh")
+fi
 [ -f "$ROSTER" ] || { echo "roster_keys: roster $ROSTER not found" >&2; exit 1; }
 
 PROVIDERS=$(awk '/^[[:space:]]*model:[[:space:]]/ {print $2}' "$ROSTER" \

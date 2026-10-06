@@ -42,11 +42,10 @@ fill RUN_ID *SHA:
     HOST="$VM.exe.xyz"   # all *.exe.xyz share one host key; the wildcard known_hosts entry is installed
 
     # ── the per-app input: which payload this run commits to ──────────────
-    # The ACTIVE roster. The root justfile's `config` variable is NOT visible here
-    # (this phase file is imported into the `sbx::lifecycle` module, and modules
-    # inherit no variables), so read the same env var the root's
-    # env_var_or_default reads, with the same fallback. Parsed here, shipped below.
-    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+    # The ACTIVE roster. SSSF_CONFIG is REQUIRED and the shared guard prints THE
+    # named error before anything is parsed or shipped — FILL ships THIS roster
+    # verbatim to /home/exedev/sssf_config.yaml, so there is no "no roster" fill.
+    ROSTER=$(sandbox_mount/host/require_sssf_config.sh)
 
     # Phase 2: `app.repo` set means TARGET mode — the payload is its own clone of
     # that public repo at app/<path>, and every ADW commit lands there. Empty

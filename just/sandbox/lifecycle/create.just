@@ -23,6 +23,11 @@ create RUN_ID TAG='':
         command -v "$bin" >/dev/null || { echo "create: '$bin' not on PATH" >&2; exit 1; }
     done
 
+    # SSSF_CONFIG is REQUIRED and is resolved BEFORE the run record exists: an
+    # unarmed kernel must leave no orphan record behind. Shared guard -> THE named
+    # error. $ROSTER is reused for the tag derivation in 2b below.
+    ROSTER=$(sandbox_mount/host/require_sssf_config.sh)
+
     # ── 1. run id ──────────────────────────────────────────────────────────────
     # The run id becomes the VM name and the VM name becomes a public hostname,
     # so a collision is two runs fighting over one URL. Anything without the
@@ -55,9 +60,8 @@ create RUN_ID TAG='':
     # ── 2b. the tag ────────────────────────────────────────────────────────────
     # Bulk identification/cleanup filters on this, so it names the APP, not the
     # kernel's ancestor. Explicit arg wins; else derive from the ACTIVE roster's
-    # app.repo basename; vendored (no repo:) -> "sssf". Same env var + fallback and
-    # same app: block awk as mount/fill/teardown (a module hides the root `config`).
-    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+    # app.repo basename; vendored (no repo:) -> "sssf". Same required $ROSTER and
+    # same app: block awk as mount/fill/teardown (resolved in preflight above).
     TAG="{{TAG}}"
     if [ -z "$TAG" ] && [ -f "$ROSTER" ]; then
         APP_REPO=$(awk '

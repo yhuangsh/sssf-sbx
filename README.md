@@ -60,7 +60,9 @@ app:
 ```
 
 Copy that roster, edit the `app:` block, and run with `SSSF_CONFIG=<your
-roster>`. **Files that matter: your roster copy + `.env`.**
+roster>`. **Files that matter: your roster copy + `.env`.** A run with
+`SSSF_CONFIG` unset fails fast with the named error above — it never falls back
+to the template.
 
 ### (b) Vendored
 
@@ -124,11 +126,46 @@ Host tools: `uv`, `bun`, `just`, and ssh access to exe.dev
 1. `cp .env.sample .env` and set the LLM provider keys your roster's models
    need — `fill` derives the required set from the roster's `model:
    provider/id` entries and fails, naming any that are missing.
-2. Point `SSSF_CONFIG` at your roster (default:
-   `adws/adw_sssf_config/sssf.config.yaml`).
+2. Point `SSSF_CONFIG` at your roster — **required, there is no default**;
+   every roster-consuming command below fails fast without it. The shipped
+   `adws/adw_sssf_config/sssf.config.yaml` is a template only.
 3. Set `APP_REPO_GIT_TOKEN` **only if** the app repo is private (public repos
    clone unauthenticated).
 4. Preflight: `just sbx manage doctor`.
+
+## Which commands need SSSF_CONFIG
+
+`SSSF_CONFIG` names the roster (models, agent scopes, and the `app:` block) the
+run uses. **It is required — there is no default roster.** When it is unset or
+empty, every roster-consuming command fails fast on the host, before any VM is
+created, with this exact message on stderr:
+
+```
+SSSF_CONFIG is not set — point it at your roster (add 'SSSF_CONFIG=adws/adw_sssf_config/sssf.<your-app>.config.yaml' to .env, or export it inline). See README -> Arming.
+```
+
+The one exception class is the **shipped per-sandbox copy**: `fill` writes the
+active roster to a fixed path inside the VM (`/home/exedev/sssf_config.yaml`),
+and the in-sandbox phases read *that* file — `ssh` carries no environment, which
+is why they take an explicit `CONFIG` argument rather than reading
+`SSSF_CONFIG`. Those commands are listed as **no** below.
+
+| command | needs `SSSF_CONFIG`? | why |
+| --- | --- | --- |
+| `just sbx mount` | yes | preflight parses the roster's `app:` block |
+| `just sbx lifecycle create` | yes | derives the VM tag from `app.repo` |
+| `just sbx lifecycle fill` | yes | ships THIS roster verbatim to `/home/exedev/sssf_config.yaml` |
+| `just sbx lifecycle teardown` | yes | the `app:` block picks the artifact set |
+| `just sbx manage doctor` | yes | roster provider-key preflight |
+| `just sbx manage harvest` | yes | the `app:` block picks the repo the bundle comes from |
+| `just adw …` (every chain: `sdlc`, `simple-sdlc`, `prompt`, …) | yes | its `--config` comes from `SSSF_CONFIG`; the chain itself refuses an empty one |
+| `just obs …` (`sessions`, `phases`, `tail`, `procs`, `rosters`, `kill`, `ui`) | yes | same requirement, enforced by the shared guard |
+| `uv run adws/adw_*.py …` (direct) | yes | `--config` is required |
+| `just sbx lifecycle setup` | no | gates against the per-sandbox copy `fill` shipped at `/home/exedev/sssf_config.yaml` (ssh carries no environment; an optional `CONFIG` argument overrides) |
+| `just sbx lifecycle execute` | no | forwards that same shipped path unless you pass `CONFIG` |
+| `just sbx lifecycle observe` | no | reads the shipped copy remotely |
+| `just sbx run agent` / `just sbx run cmd` | no | record-driven; the sandbox pi reads what `fill` shipped |
+| `just sbx manage list` | no | reads run records only |
 
 ## Use
 

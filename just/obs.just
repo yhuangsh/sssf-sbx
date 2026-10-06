@@ -11,11 +11,15 @@ set positional-arguments
 default:
     @just --list obs
 
-# The roster is chosen per run — `--config <path>` on any ADW, or SSSF_CONFIG.
-# This is how you find the path to pass.
+# SSSF_CONFIG is REQUIRED — there is no default roster. Every query below is a
+# roster-consuming command and fails fast without it, with the one named error
+# (the guard delegates to the shared script so the text lives in one place).
+# The `default` listing stays unguarded so `just --list obs` still resolves.
+_require-sssf-config:
+    @sandbox_mount/host/require_sssf_config.sh > /dev/null
 
 # which rosters exist and who is in them
-rosters:
+rosters: _require-sssf-config
     #!/usr/bin/env bash
     for f in adws/adw_sssf_config/*.yaml; do
       printf '%s\n' "$f"
@@ -32,25 +36,25 @@ rosters:
     done
 
 # recent sessions
-sessions:
+sessions: _require-sssf-config
     sqlite3 adws/adw_data/sssf.db "select adw_id, status, substr(request,1,60), total_tokens, round(total_cost,4) from sessions order by started_at desc limit 10;"
 
 # phases for one adw: just obs phases <adw_id>
-phases ADW_ID:
+phases ADW_ID: _require-sssf-config
     sqlite3 adws/adw_data/sssf.db "select seq, name, kind, owner, status, attempt from phases where adw_id='{{ADW_ID}}' order by seq;"
 
 # live event tail for one adw: just obs tail <adw_id>
-tail ADW_ID:
+tail ADW_ID: _require-sssf-config
     sqlite3 adws/adw_data/sssf.db "select rowid, type, name, started_at from events where adw_id='{{ADW_ID}}' order by rowid desc limit 25;"
 
 # what a run is running right now: just obs procs <adw_id>
-procs ADW_ID:
+procs ADW_ID: _require-sssf-config
     sqlite3 adws/adw_data/sssf.db "select kind, name, pid, command, started_at from processes where adw_id='{{ADW_ID}}' and ended_at is null order by id;"
 
 # Verifies each pid still looks like the thing we recorded; pids get recycled.
 
 # stop a stuck run — children first, then the workflow
-kill ADW_ID:
+kill ADW_ID: _require-sssf-config
     #!/usr/bin/env bash
     set -uo pipefail
     rows=$(sqlite3 adws/adw_data/sssf.db "select kind||' '||pid from processes where adw_id='{{ADW_ID}}' and ended_at is null order by case kind when 'agent' then 0 else 1 end, id desc;")
@@ -69,5 +73,5 @@ kill ADW_ID:
 # app dir — so it is passed explicitly rather than left to be discovered.
 
 # boot the observability UI (server :4600 + vite dev)
-ui:
+ui: _require-sssf-config
     cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{invocation_directory()}}/adws/adw_data/sssf.db bun run server/index.ts &) && bunx vite

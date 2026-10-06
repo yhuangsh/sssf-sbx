@@ -17,9 +17,9 @@ mount RUN_ID TAG='':
 
     # ── arming preflight: an unarmed kernel must fail HERE, in seconds, on the
     # HOST — not after full VM creation cost at provision step 5/9. Same roster
-    # parse FILL uses (the root justfile's `config` variable is not visible in a
-    # module, so read the same env var with the same fallback).
-    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+    # parse FILL uses; SSSF_CONFIG is REQUIRED and the shared guard prints THE
+    # named error and exits before anything is created (no silent fallback).
+    ROSTER=$(sandbox_mount/host/require_sssf_config.sh)
     APP_REPO=$(awk '
       /^app:[[:space:]]*$/      { a=1; next }
       /^[^[:space:]]/           { a=0 }

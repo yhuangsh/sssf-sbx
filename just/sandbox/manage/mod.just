@@ -22,6 +22,10 @@ default:
 doctor:
     #!/usr/bin/env bash
     set -uo pipefail
+    # SSSF_CONFIG is REQUIRED — with no roster there is nothing to preflight, so
+    # the shared guard's named error IS the report. Resolved once here; reused by
+    # the arming-visibility block below.
+    ROSTER=$(sandbox_mount/host/require_sssf_config.sh) || exit 1
     ok=0
     chk() { if eval "$2" >/dev/null 2>&1; then printf '  ok    %s\n' "$1"; else printf '  FAIL  %s\n' "$1"; ok=1; fi; }
     chk "ssh exe.dev reachable"            'ssh -o BatchMode=yes -o ConnectTimeout=15 exe.dev whoami'
@@ -32,9 +36,9 @@ doctor:
 
     # ── arming visibility, NOT a gate: an unarmed kernel is a legitimate state,
     # but it must not be invisible — that is exactly how the late-failure defect
-    # hid. Same roster parse as mount's preflight / fill. Target mode (app.repo
-    # set) has nothing local to check. Never touches `ok`, so doctor still exits 0.
-    ROSTER="${SSSF_CONFIG:-adws/adw_sssf_config/sssf.config.yaml}"
+    # hid. Same required $ROSTER (resolved at the top) and same parse as mount's
+    # preflight / fill. Target mode (app.repo set) has nothing local to check.
+    # Never touches `ok`, so doctor still exits 0.
     APP_REPO=$(awk '/^app:[[:space:]]*$/ { a=1; next } /^[^[:space:]]/ { a=0 } a && /^[[:space:]]+repo:[[:space:]]/ { print $2; exit }' "$ROSTER")
     APP_PATH=$(awk '/^app:[[:space:]]*$/ { a=1; next } /^[^[:space:]]/ { a=0 } a && /^[[:space:]]+path:[[:space:]]/ { print $2; exit }' "$ROSTER")
     if [ -z "$APP_REPO" ]; then
