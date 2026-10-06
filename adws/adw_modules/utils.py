@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import secrets
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -61,6 +62,29 @@ def resolve_prompt(arg: str) -> str:
     except OSError:
         pass
     return arg
+
+
+CONFIG_REQUIRED_MSG = (
+    "SSSF_CONFIG is not set — point it at your roster (add "
+    "'SSSF_CONFIG=adws/adw_sssf_config/sssf.<your-app>.config.yaml' to .env, "
+    "or export it inline). See README -> Arming."
+)
+
+
+def require_config(config: str | None) -> str:
+    """Return the roster path or die with THE named error.
+
+    Explicit --config wins; otherwise SSSF_CONFIG from the environment (this
+    module already load_dotenv()s, so an armed .env counts for direct script
+    runs). Message is byte-identical to
+    sandbox_mount/host/require_sssf_config.sh — keep the two copies in sync.
+    Exit 2 (argparse-adjacent) where the shell guard exits 1.
+    """
+    roster = config or os.environ.get("SSSF_CONFIG", "").strip()
+    if not roster:
+        print(CONFIG_REQUIRED_MSG, file=sys.stderr)
+        sys.exit(2)
+    return roster
 
 
 def engineer_name() -> str:
