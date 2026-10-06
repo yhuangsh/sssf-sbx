@@ -136,7 +136,10 @@ setup RUN_ID CONFIG="":
     # roster's `app:` block names a repo, the target clone must exist and match
     # commit_sha; otherwise (vendored payload) commit_sha is the factory HEAD.
     # Only the FACTORY tree must be clean — a target clone is ignored there, and
-    # provision's bun install may legitimately rewrite the target's bun.lock.
+    # provision's bun install may legitimately rewrite the target's bun.lock. The
+    # configured app.path's untracked-directory entry ('?? <path>/') is filtered
+    # out before that assertion: the path is roster DATA, so the gate must treat
+    # it as expected content rather than depend on a hand-edited .gitignore.
     echo "[gate] A git integrity"
     A_MODE=""
     if A_OUT=$("${SSH[@]}" 'bash -s' "$SHA" "$FACTORY_SHA" "$CONFIG" <<'REMOTE_A'
@@ -199,7 +202,15 @@ setup RUN_ID CONFIG="":
       echo "   commit_sha ${want} (matches factory HEAD)"
     fi
 
+    # The roster's app.path is DATA, not a .gitignore concern: FILL clones the
+    # target app to ~/app/$app_path, so its untracked-directory entry ('?? hello/')
+    # is expected. Drop exactly that one whole line; every OTHER porcelain line
+    # still fails the gate. Only when app_path is non-empty (it is empty in
+    # vendored mode, and an empty pattern must never hide real output).
     porcelain="$(git status --porcelain)"
+    if [ -n "$app_path" ]; then
+      porcelain="$(printf '%s\n' "$porcelain" | grep -vxF "?? ${app_path}/" || true)"
+    fi
     if [ -n "$porcelain" ]; then
       echo "   unexpected working-tree changes in the factory clone (the tree must be clean):"
       printf '%s\n' "$porcelain" | sed 's/^/     /'
