@@ -118,6 +118,33 @@ checks:
   test: [uv, run, pytest]
 ```
 
+### App credentials: the `APP_*` namespace
+
+Extra credentials your app's provisioning needs go in the host `.env` as `APP_*`
+variables. They ship into the sandbox by the same stdin/0600 path as the LLM
+keys, land in `app/.env`, and `provision.sh` sources that file before each
+manifest command — so the manifest's `install:`/`build:` commands see them as
+environment variables with no hand-sourcing. Host-only overrides (`SSSF_CONFIG`,
+`PI_*`, `ENGINEER_NAME`) never cross.
+
+```sh
+# .env (host) — a marked example; use a reusable, ephemeral-tagged key
+APP_TAILSCALE_AUTHKEY=tskey-...
+```
+
+```yaml
+# sssf.app.yaml — install tailscale and join a tailnet during install
+runtime: none
+install:
+  - command -v tailscale >/dev/null 2>&1 || curl -fsSL https://tailscale.com/install.sh | sh
+  - sudo tailscale up --auth-key="$APP_TAILSCALE_AUTHKEY" --ephemeral
+```
+
+Auth keys should be reusable and **ephemeral-tagged** so disposable VMs do not
+accumulate in the tailnet. The first mount after adding a heavy install
+downloads over a slow link; idempotent guards like `command -v tailscale` keep
+re-mounts fast.
+
 ## Prerequisites + arming checklist
 
 Host tools: `uv`, `bun`, `just`, and ssh access to exe.dev

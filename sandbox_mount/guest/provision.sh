@@ -242,7 +242,16 @@ run_app_stage() {
     cmd="${!var}"
     say "${kind,,}: $cmd"
     STEP="app ${kind,,}: ${cmd}"
-    ( cd "$APP_DIR" && bash -c "$cmd" )
+    (
+      cd "$APP_DIR"
+      # FILL ships LLM + APP_* credentials to the factory-root .env, which on
+      # this VM is $HOME/app/.env == $REPO_ROOT/.env. Source it (exported) so the
+      # manifest's install:/build: commands see APP_* (and the LLM keys) as
+      # environment variables without hand-sourcing. Mirrors summary step 9/9.
+      # Absent is normal — nothing was shipped — never an error.
+      if [[ -f "$REPO_ROOT/.env" ]]; then set -a; . "$REPO_ROOT/.env"; set +a; fi
+      bash -c "$cmd"
+    )
   done
 }
 
@@ -260,7 +269,13 @@ if [[ "$APP_MANIFEST_PRESENT" == 1 ]]; then
 elif [[ -f "$APP_DIR/package.json" ]]; then
   say "no manifest — package.json fallback: bun install"
   STEP="app fallback: bun install"
-  ( cd "$APP_DIR" && bun install )
+  (
+    cd "$APP_DIR"
+    # Same credential channel as run_app_stage: manifest-equivalent fallback
+    # installs see APP_*/LLM vars too.
+    if [[ -f "$REPO_ROOT/.env" ]]; then set -a; . "$REPO_ROOT/.env"; set +a; fi
+    bun install
+  )
 else
   say "skipped $APP_PATH (no manifest, no package.json)"
 fi

@@ -4,13 +4,18 @@
 # Imported into the root justfile, so no `set` lines here and no local variables:
 # six phase files share one scope and a `repo :=` in each would collide.
 #
-# ONE shape of secret crosses the wire here: the allowlisted vars the engineer
-# set in the host .env, shipped as ENVIRONMENT VARIABLES into app/.env on the VM.
-# Two kinds ride it: the LLM keys pi's built-in providers read, and the OPTIONAL
-# APP_REPO_GIT_TOKEN that authenticates a PRIVATE app repo. There is no host pi
-# state to mirror: every provider the rosters name is a pi BUILT-IN, keyed by
+# ONE shape of secret crosses the wire here: allowlisted host-.env vars, shipped
+# as ENVIRONMENT VARIABLES into app/.env on the VM. Three kinds ride it: the LLM
+# keys pi's built-in providers read; the OPTIONAL APP_REPO_GIT_TOKEN that
+# authenticates a PRIVATE app repo; and the APP_* namespace — the app's DECLARED
+# secret channel, whose values the manifest's install:/build: commands see as
+# environment variables (provision.sh sources the landed file). There is no host
+# pi state to mirror: every provider the rosters name is a pi BUILT-IN, keyed by
 # those env vars, and pi's built-in catalog carries each provider's
-# baseUrl/api/cost. The discipline is strict — stdin only, 0600, never echoed.
+# baseUrl/api/cost. The discipline is strict — stdin only, 0600, never echoed,
+# and the host-only overrides (SSSF_CONFIG, PI_MODELS_PATH, PI_PATH,
+# ENGINEER_NAME) never cross because none matches the allowlist or the APP_
+# prefix.
 
 # clone the factory into the VM, optionally pin a sha, ship the roster + credentials: just sbx lifecycle fill <run-id> [sha]
 fill RUN_ID *SHA:
@@ -183,12 +188,18 @@ fill RUN_ID *SHA:
     # The target clone below authenticates against a possibly-PRIVATE app repo
     # by reading APP_REPO_GIT_TOKEN out of app/.env, so app/.env must land FIRST.
     # This is THE credential path: allowlisted host-.env vars cross as
-    # ENVIRONMENT VARIABLES into app/.env on the VM (0600, stdin only, never
-    # echoed). Two kinds ride it: the LLM provider keys the sandbox pi's
-    # built-in providers read, and the OPTIONAL app-repo git token. Also serves
-    # anything else that reads keys from the environment (the ADW python, SDKs).
+    # ENVIRONMENT VARIABLES into app/.env on the VM — stdin only, 0600, never
+    # echoed (the proof line below prints NAMES only). Three kinds ride it:
+    #   * LLM provider keys the sandbox pi's built-in providers read;
+    #   * the OPTIONAL app-repo git token (APP_REPO_GIT_TOKEN);
+    #   * the APP_* namespace — the app's DECLARED secret channel. Every host
+    #     var named APP_* ships, and provision.sh sources the landed file before
+    #     each manifest install:/build: command, so those commands see APP_* as
+    #     environment variables with no hand-sourcing. Also serves anything else
+    #     that reads keys from the environment (the ADW python, SDKs).
     # ALLOWLISTED on purpose: host-only overrides (PI_MODELS_PATH, SSSF_CONFIG,
-    # ENGINEER_NAME, PI_PATH) must never leak into the box.
+    # ENGINEER_NAME, PI_PATH) never match the explicit list or the APP_ prefix,
+    # so they must never leak into the box.
     CRED_ENV_VARS=(
         ANTHROPIC_API_KEY OPENAI_API_KEY OPENROUTER_API_KEY
         GEMINI_API_KEY GOOGLE_API_KEY DEEPSEEK_API_KEY ZAI_API_KEY
@@ -212,6 +223,27 @@ fill RUN_ID *SHA:
             SHIPPED+=("$v")
         fi
     done
+    # The widened rule: the APP_* namespace is the app's declared secret channel.
+    # Every host-.env var named APP_* ships alongside the LLM keys over the SAME
+    # stdin-only, 0600, never-echoed path, and provision.sh sources the landed
+    # file before each manifest install:/build: command so those commands see the
+    # values as environment variables. APP_REPO_GIT_TOKEN is already in the
+    # explicit list above (it starts with APP_); skip anything already shipped so
+    # it ships exactly once. Unset-or-empty does not ship, matching the loop above.
+    #
+    # compgen -e, not ${!APP_@}: prefix expansion of SHELL variables would also
+    # sweep up this recipe's OWN locals (APP_REPO/APP_REF/APP_PATH, assigned
+    # above) into app/.env. -e lists only EXPORTED names, which is exactly the
+    # host .env dotenv-load put in this process — never the recipe's locals.
+    while IFS= read -r v; do
+        [ -n "$v" ] || continue
+        case " ${SHIPPED[*]:-} " in *" $v "*) continue ;; esac
+        val="${!v:-}"
+        if [ -n "$val" ]; then
+            ENV_CONTENT+="$v=$val"$'\n'
+            SHIPPED+=("$v")
+        fi
+    done < <(compgen -e APP_ || true)
     if [ "${#SHIPPED[@]}" -gt 0 ]; then
         printf '%s' "$ENV_CONTENT" \
             | ssh "$HOST" 'umask 077 && cat > "$HOME/app/.env" && chmod 600 "$HOME/app/.env"'
