@@ -27,7 +27,7 @@ fill RUN_ID *SHA:
     # FORK (not upstream disler): it is the one that carries the fix commits, so
     # a fresh VM provisions itself with no push access from the host. Only the
     # TARGET clone (below) can be private, and only via APP_REPO_GIT_TOKEN.
-    REPO="https://github.com/yhuangsh/inkwell-agent-sandboxes-and-software-factory.git"
+    REPO="https://github.com/yhuangsh/sssf-sbx.git"
 
     # *SHA is variadic: it interpolates to "" when unpinned, space-joined otherwise.
     # Only the first token is meaningful; extra words are a caller mistake we ignore.
