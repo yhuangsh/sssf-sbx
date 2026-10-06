@@ -87,8 +87,8 @@ runtime is whatever `provision.sh` can supply; there is no apt fallback.
 | field | meaning |
 | --- | --- |
 | `runtime:` | `bun` \| `node` \| `uv` \| `none`. CDN-bootstrapped (bun from bun.sh, Node from nodejs.org, uv from the image) — never apt. A runtime the image cannot provide is a named failure. `none`/absent skips the check. |
-| `install:` | List of shell commands, run from the app root at `setup`. |
-| `build:` | Same, optional. |
+| `install:` | List of shell commands, run from the app root at `setup` **with the app's environment**: the `APP_*` secrets and the shipped LLM keys from `app/.env` are already in the environment (see [App credentials](#app-credentials-the-app_-namespace)). |
+| `build:` | Same, optional — also runs with the app's environment (`APP_*` secrets + `app/.env` LLM keys; see [App credentials](#app-credentials-the-app_-namespace)). |
 | `serve:` | Optional. `command`, `port` (default `4501`), `health_path` (default `/`). **Absent = `observe` skips the app lane** (library/CLI apps). |
 | `checks:` | The deterministic quality gate. Map of `name: [argv...]`, or a list of `{name, area, operation, argv, timeout_seconds}`. **Absent = the SDLC runs without it.** |
 
@@ -156,8 +156,10 @@ Host tools: `uv`, `bun`, `just`, and ssh access to exe.dev
 2. Point `SSSF_CONFIG` at your roster — **required, there is no default**;
    every roster-consuming command below fails fast without it. The shipped
    `adws/adw_sssf_config/sssf.config.yaml` is a template only.
-3. Set `APP_REPO_GIT_TOKEN` **only if** the app repo is private (public repos
-   clone unauthenticated).
+3. Add `APP_REPO_GIT_TOKEN` **only if** the app repo is private (public repos
+   clone unauthenticated), plus any other `APP_*` secrets your manifest's
+   `install:`/`build:` commands need (e.g. `APP_TAILSCALE_AUTHKEY`) — see
+   [App credentials](#app-credentials-the-app_-namespace) above.
 4. Preflight: `just sbx manage doctor`.
 
 ## Which commands need SSSF_CONFIG
