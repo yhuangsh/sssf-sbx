@@ -322,9 +322,12 @@ def ask_yn(prompt: str, default: bool) -> bool:
         print("  please answer y or n")
 
 
-def ask_choice(prompt: str, choices: tuple[str, ...], default: str) -> str:
+def ask_choice(prompt: str, choices: tuple[str, ...], default: str,
+               aliases: dict[str, str] | None = None) -> str:
+    aliases = aliases or {}
     while True:
         line = ask(prompt, default).lower()
+        line = aliases.get(line, line)
         if line in choices:
             return line
         print(f"  please answer one of: {', '.join(choices)}")
@@ -629,7 +632,9 @@ def main(argv: list[str]) -> int:
         break
 
     # ── 2. exists / create + visibility ──────────────────────────────────────
-    mode = ask_choice("repo exists or create-new", ("exists", "create"), "create")
+    # Accept the single-letter shorthands `e`/`c` as well as the full words.
+    mode = ask_choice("repo exists or create-new", ("exists", "create"), "create",
+                      aliases={"e": "exists", "c": "create"})
     default_branch = "main"
     if mode == "exists":
         view = subprocess.run(
