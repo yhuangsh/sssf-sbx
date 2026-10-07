@@ -108,13 +108,19 @@ What it produces, so the next command is a plain `just sbx mount`:
 - **private repos** — checks `APP_REPO_GIT_TOKEN` in the host `.env` and offers
   to add it from `gh auth token`; without it `fill` fails with
   `APP_REPO_PRIVATE_NO_TOKEN`.
-- **the roster** — writes `adws/adw_sssf_config/sssf.<name>.config.yaml` from
-  the shipped hello template (only the `app:` block changed) **and commits it**,
-  because the roster is team config. Then it prints the next steps:
+- **the roster** — writes `sssf.<name>.config.yaml` **in the current directory**
+  (the kernel clone root, next to `.env` and the justfile) from the shipped hello
+  template (only the `app:` block changed) and leaves it **untracked** — the
+  roster is your file. If that file already exists the scaffolder asks
+  (overwrite / pick another name / abort) rather than clobbering. Committing the
+  roster into the kernel repo for team sharing is your choice; a useful side
+  effect is that generated rosters no longer touch the kernel's git history. Then
+  it prints the next steps:
 
 ```sh
-# [scaffold] done — <owner>/<name> (public) + roster adws/adw_sssf_config/sssf.<name>.config.yaml (committed)
-#   1. add to .env:   SSSF_CONFIG=adws/adw_sssf_config/sssf.<name>.config.yaml
+# [scaffold] done — <owner>/<name> (public) + roster sssf.<name>.config.yaml (untracked — your file, not committed)
+#   1. point SSSF_CONFIG at it, in .env or inline:   SSSF_CONFIG=sssf.<name>.config.yaml
+#                                                    (relative roster paths resolve from this repo root)
 #   2. preflight:     just sbx manage doctor
 #   3. mount:         just sbx mount <run-id>
 ```

@@ -10,7 +10,9 @@ Runs on the HOST, in the user's terminal. Everything it writes is DATA the
 existing machinery already consumes: an `sssf.app.yaml` manifest in the app repo
 (parsed by provision.sh, observe.just and quality.py) and a roster copied from
 the shipped `sssf.hello.config.yaml` with only the `app:` block filled in (parsed
-by mount.just and manage/mod.just with awk — hence the flat two-space keys).
+by mount.just and manage/mod.just with awk — hence the flat two-space keys). The
+roster lands in the repo root as `sssf.<name>.config.yaml` and is left untracked
+— scaffold never commits to the kernel repo.
 
 Two paths, one gate:
 
@@ -532,12 +534,27 @@ def check_private_token() -> None:
 
 
 def write_roster(owner: str, name: str, ref: str, visibility: str) -> Path:
-    roster = ROSTERS_DIR / f"sssf.{name}.config.yaml"
-    if roster.exists():
-        raise ScaffoldError(
-            f"roster {roster.relative_to(REPO_ROOT)} already exists — remove it or "
-            "pick another repo name (scaffold never overwrites a roster)"
+    # The roster is the USER's file: written to the repo root (where .env and the
+    # justfile live), never committed. If it already exists we ASK — overwrite,
+    # rename, or abort — and never clobber silently.
+    roster = REPO_ROOT / f"sssf.{name}.config.yaml"
+    while roster.exists():
+        choice = ask_choice(
+            f"roster {roster.name} already exists — overwrite / pick another name / abort",
+            ("overwrite", "rename", "abort"), "abort",
+            aliases={"o": "overwrite", "r": "rename", "a": "abort"},
         )
+        if choice == "overwrite":
+            break
+        if choice == "abort":
+            raise ScaffoldError(
+                f"roster {roster.name} exists — aborted at user request (no roster written)"
+            )
+        new = ask("new roster name (the <name> in sssf.<name>.config.yaml)", "")
+        if not NAME_RE.match(new):
+            print("  invalid name — use [A-Za-z0-9_.-]+")
+            continue
+        roster = REPO_ROOT / f"sssf.{new}.config.yaml"
 
     template = TEMPLATE.read_text().splitlines()
     try:
@@ -561,7 +578,7 @@ def write_roster(owner: str, name: str, ref: str, visibility: str) -> Path:
     body = template[:app_idx] + block + template[agents_idx:]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     header = [
-        f"# sssf.{name}.config.yaml — SCAFFOLDED by 'just sbx scaffold' on {today}",
+        f"# {roster.name} — SCAFFOLDED by 'just sbx scaffold' on {today}",
         f"# app repo: https://github.com/{owner}/{name} ({visibility}) — everything below is the shipped hello template with the app: block filled in.",
     ]
     text = "\n".join(header + body) + "\n"
@@ -579,11 +596,7 @@ def write_roster(owner: str, name: str, ref: str, visibility: str) -> Path:
             raise ScaffoldError(f"generated roster app.{key} is {app.get(key)!r}, expected {want!r}")
 
     roster.write_text(text)
-    rel = str(roster.relative_to(REPO_ROOT))
-    run(["git", "add", "--", rel], cwd=REPO_ROOT)
-    run(["git", "commit", "-m", f"Add scaffolded roster for {owner}/{name}", "--", rel], cwd=REPO_ROOT)
-    sha = run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT).stdout.strip()
-    print(f"[scaffold] committed roster: {rel} ({sha})")
+    print(f"[scaffold] wrote roster: {roster.name} (in the current directory, left untracked — NOT committed)")
     return roster
 
 
@@ -693,7 +706,7 @@ def main(argv: list[str]) -> int:
         checks = default_checks
 
     # ── 6. summary + the one gate ────────────────────────────────────────────
-    roster_rel = f"adws/adw_sssf_config/sssf.{name}.config.yaml"
+    roster_rel = f"sssf.{name}.config.yaml"
     print("\n──────────────────────────────────────────────────────────────")
     print(f"  repo:        {owner}/{name}")
     print(f"  route:       {mode}")
@@ -708,7 +721,7 @@ def main(argv: list[str]) -> int:
     else:
         print(f"  actions:     gh repo clone {owner}/{name}; add ONLY missing files;")
         print(f"               commit + push origin HEAD:{default_branch}")
-    print(f"  roster:      {roster_rel} (written + committed to this repo)")
+    print(f"  roster:      {roster_rel} (written to the current directory, untracked — NOT committed)")
     if visibility == "private":
         token_state = "present" if env_has_app_repo_token() else "MISSING — will offer to add"
         print(f"  APP_REPO_GIT_TOKEN: {token_state}")
@@ -733,14 +746,18 @@ def main(argv: list[str]) -> int:
         check_private_token()
 
     # ── 4'. roster ───────────────────────────────────────────────────────────
-    write_roster(owner, name, default_branch, visibility)
+    roster_path = write_roster(owner, name, default_branch, visibility)
 
     # ── 5'. finish ───────────────────────────────────────────────────────────
-    print(f"\n[scaffold] done — {owner}/{name} ({visibility}) + roster {roster_rel} (committed)\n")
+    print(f"\n[scaffold] done — {owner}/{name} ({visibility}) + roster {roster_path.name} "
+          "(untracked — your file, not committed)\n")
     print("next steps:")
-    print(f"  1. add to .env:   SSSF_CONFIG={roster_rel}")
+    print(f"  1. point SSSF_CONFIG at it, in .env or inline:   SSSF_CONFIG={roster_path.name}")
+    print("                                                   (relative roster paths resolve from this repo root)")
     print("  2. preflight:     just sbx manage doctor")
     print("  3. mount:         just sbx mount <run-id>")
+    print("note: the roster is untracked. Committing it into the kernel repo (e.g. to share it")
+    print("      with your team) is your choice — scaffold never touches the kernel's git history.")
     print("lanes: 'just sbx run agent' steers; 'just sbx lifecycle execute' is the factory.")
     return 0
 
