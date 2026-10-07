@@ -15,6 +15,7 @@
 #
 # THE SHAPE:
 #   just sbx mount        the chain — the entry point, so it stays at this level
+#   just sbx scaffold     interactive: create/adopt a GitHub app repo + roster
 #   just sbx lifecycle    the six phases the chain is made of
 #   just sbx manage       auxiliary: preflight, readback, fleet ops
 #   just sbx run          put work in / look at a box: `run agent`, `run cmd`
@@ -29,6 +30,7 @@ mod run
 mod orch
 
 import 'mount.just'
+import 'scaffold.just'
 
 # list the sandbox commands
 default:

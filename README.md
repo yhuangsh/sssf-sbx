@@ -29,8 +29,8 @@ and whether it passed; the models only write the code.
 | `justfile` | Root entry point. Mounts `mod adw` (the chains), `mod sbx` (sandbox orchestration), `mod obs` (trace db). The `adw`/`sbx` split is by credential — the exe.dev account never leaves the host, so a sandbox cannot mount sandboxes. |
 | `just/adws.just` | The in-sandbox chain recipes — `adw sdlc`, `simple-sdlc`, `plan-build-test-quality`, `prompt`, `scout`, … each runs `uv run adws/adw_*.py --config <roster>`. |
 | `just/obs.just` | Read the trace db (`adws/adw_data/sssf.db`): `sessions`, `phases`, `tail`, `procs`, `kill`, `rosters`, and `ui` (boots the visualizer). |
-| `just/sandbox/` | The sandbox layer. `mount.just` is the chain; `lifecycle/` holds the six phases (`create`, `fill`, `setup`, `execute`, `observe`, `teardown`); `manage/` holds `doctor`, `list`, `harvest`; `run/` holds the `agent` and `cmd` lanes. |
-| `sandbox_mount/host/` | Host-side helpers: `run_record.py` (the only cross-phase state), `roster_keys.sh` (asserts every roster provider's key is set), `runs_table.py` (formats `manage list`). |
+| `just/sandbox/` | The sandbox layer. `mount.just` is the chain; `scaffold.just` is the interactive app-repo scaffolder; `lifecycle/` holds the six phases (`create`, `fill`, `setup`, `execute`, `observe`, `teardown`); `manage/` holds `doctor`, `list`, `harvest`; `run/` holds the `agent` and `cmd` lanes. |
+| `sandbox_mount/host/` | Host-side helpers: `run_record.py` (the only cross-phase state), `scaffold.py` (interactive `just sbx scaffold`; `gh`-driven), `roster_keys.sh` (asserts every roster provider's key is set), `runs_table.py` (formats `manage list`). |
 | `sandbox_mount/guest/provision.sh` | The guest provisioner, streamed over ssh at `setup`. Bootstraps bun + just, standalone Node/npm, pi at the registry `latest`; then installs the app per its manifest. **Never apt.** |
 | `adws/` | The agent layer: 12 `adw_*.py` chains, the `adw_modules/` runtime, `adw_data/prompt_engineering/` + `adw_data/harness_engineering/`, and `adw_sssf_config/` rosters. |
 | `.claude/skills/sssf/apps/visualizer/` | The trace UI (Vue + bun). `just obs ui` boots it; in a sandbox `observe` serves it on :4600. |
@@ -78,6 +78,50 @@ app:
 ```
 
 **Files that matter: those five paths + your roster + `.env`.**
+
+### Scaffolding a new app: `just sbx scaffold`
+
+Don't hand-write the repo, the manifest, or the roster — generate them. Run
+from the kernel checkout:
+
+```sh
+just sbx scaffold            # interactive; prompts for everything
+just sbx scaffold owner/name # pre-fills the repo name
+```
+
+It asks (sane defaults, bare Enter accepts): repo name, **exists** or
+**create-new** (and public/private if new), runtime (**bun** — the default —
+`node`, `uv`, or `none` for a library), whether the app **serves** (command,
+port, `health_path`), and whether to add the skeleton's **test check**. It
+prints a summary and asks before doing anything destructive.
+
+What it produces, so the next command is a plain `just sbx mount`:
+
+- **create-new** — `gh repo create <owner>/<name> --<visibility> --push` with a
+  runtime-matched skeleton (`bun`: `package.json` + `server.ts` +
+  `server.test.ts`; `node`: zero-dependency `node:http` + `node --test`; `uv`:
+  `pyproject.toml` + pytest; `none`: README-only), an `sssf.app.yaml` manifest,
+  and a `.gitignore`.
+- **existing** — `gh repo clone`, then **add only what is missing** (manifest,
+  skeleton if the repo is empty-ish, `.gitignore`). Existing files are never
+  overwritten: an existing `sssf.app.yaml` is kept unless you say otherwise.
+- **private repos** — checks `APP_REPO_GIT_TOKEN` in the host `.env` and offers
+  to add it from `gh auth token`; without it `fill` fails with
+  `APP_REPO_PRIVATE_NO_TOKEN`.
+- **the roster** — writes `adws/adw_sssf_config/sssf.<name>.config.yaml` from
+  the shipped hello template (only the `app:` block changed) **and commits it**,
+  because the roster is team config. Then it prints the next steps:
+
+```sh
+# [scaffold] done — <owner>/<name> (public) + roster adws/adw_sssf_config/sssf.<name>.config.yaml (committed)
+#   1. add to .env:   SSSF_CONFIG=adws/adw_sssf_config/sssf.<name>.config.yaml
+#   2. preflight:     just sbx manage doctor
+#   3. mount:         just sbx mount <run-id>
+```
+
+**`gh`, installed and authenticated (`gh auth login`), is a hard dependency of
+this one command** — it is the only `sbx` command that needs it, and it fails
+with named guidance if `gh` is absent or not logged in.
 
 ## Arming for any language
 
