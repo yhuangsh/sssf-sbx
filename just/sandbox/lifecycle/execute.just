@@ -16,6 +16,16 @@
 # No sandbox-minted credentials exist: the only host-only credential is the
 # exe.dev account, and it never leaves the host. We also never ask ssh to forward
 # host env (no SendEnv), so nothing from .env leaks over.
+#
+# SESSION TRACKING (GitHub issues). When issues are enabled (SSSF_ISSUES != '0',
+# default on) and the roster is TARGET mode (app.repo set), execute opens one
+# issue per run in the app's own repo BEFORE the SDLC is launched — title = the
+# instruction verbatim, label sssf:running — and spawns a detached HOST watcher
+# that adds one milestone comment mid-run and closes the issue with the full
+# audit record when the session ends. `gh` runs on the host only; the VM never
+# sees a GitHub credential. SSSF_ISSUES=0 disables it; a roster with no app.repo
+# (vendored mode) skips with a named message. Every tracker call is best-effort:
+# it warns and never fails the execute.
 
 # usage: just sbx lifecycle execute <run-id> "add a word-count badge to the editor footer"
 #        just sbx lifecycle execute <run-id> prompts/06-redesign-quiet-room.md adws/adw_sssf_config/sssf.frontier.config.yaml
@@ -76,6 +86,44 @@ execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA:
     CFG_ARG=" --config $(printf '%q' "$CONFIG")"
     echo "→ roster: $CONFIG"
 
+    # ── issue tracking (best-effort; never fails the execute) ────────────────
+    # Decide once, here, whether this run gets an issue: disabled entirely by
+    # SSSF_ISSUES=0, or skipped in vendored mode (no app.repo — there is no
+    # separate app repo to file into). Both are named skips, not failures.
+    TRACKER="{{justfile_directory()}}/sandbox_mount/host/issue_tracker.py"
+    ISSUES_ON=1
+    SINCE=""
+    if [ "${SSSF_ISSUES:-1}" = "0" ]; then
+        ISSUES_ON=0
+        echo "→ issues: disabled (SSSF_ISSUES=0) — skipping issue tracking"
+    else
+        # Prefer the HOST roster when SSSF_CONFIG is set (the usual case); else
+        # read the per-sandbox copy FILL shipped. Same app: block awk as
+        # mount/fill/teardown/harvest. Any failure here must not abort.
+        ROSTER_TEXT=""
+        if [ -n "${SSSF_CONFIG:-}" ] && [ -f "${SSSF_CONFIG}" ]; then
+            ROSTER_TEXT="$(cat "${SSSF_CONFIG}" 2>/dev/null || true)"
+        else
+            ROSTER_TEXT="$(ssh "$VM".exe.xyz "cat $(printf '%q' "$CONFIG")" 2>/dev/null || true)"
+        fi
+        APP_REPO_ISSUES="$(printf '%s\n' "$ROSTER_TEXT" | awk '
+          /^app:[[:space:]]*$/ { a=1; next }
+          /^[^[:space:]]/      { a=0 }
+          a && /^[[:space:]]+repo:[[:space:]]/ { print $2; exit }
+        ')"
+        if [ -z "$APP_REPO_ISSUES" ]; then
+            ISSUES_ON=0
+            echo "→ issues: vendored mode (no app.repo) — skipping issue tracking"
+        fi
+    fi
+    if [ "$ISSUES_ON" = 1 ]; then
+        # Captured BEFORE launch: the watcher matches the session it watches by
+        # started_at >= since, because the adw_id does not exist yet.
+        SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        uv run "$TRACKER" open {{RUN_ID}} --instruction "$PROMPT" --chain "{{ADW}}" \
+            || echo "!! issue open failed (best-effort) — continuing without it" >&2
+    fi
+
     # All three detachment pieces are mandatory or ssh never returns: nohup
     # (survive session end), the redirect (release stdout/stderr), < /dev/null
     # (release stdin). `echo $!` inside the subshell is what gives us the PID —
@@ -106,4 +154,15 @@ execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA:
 
     "$RR" set {{RUN_ID}} pid="$PID"
     echo "→ pid $PID recorded; SDLC is running detached"
+
+    # ── issue watcher (best-effort; host process, gh needs the host) ────────
+    # Same three detachment pieces as the SDLC: nohup, redirect, < /dev/null.
+    # The watcher polls the VM trace every ~30s and closes the issue with the
+    # outcome; if it dies, `teardown` and `just sbx manage sync-issues` are the
+    # backstops, which is why this is never allowed to fail the execute.
+    if [ "$ISSUES_ON" = 1 ]; then
+        mkdir -p .sandbox/runs
+        ( nohup uv run "$TRACKER" watch {{RUN_ID}} --since "$SINCE" \
+            > ".sandbox/runs/{{RUN_ID}}.watcher.log" 2>&1 < /dev/null & echo "→ issue watcher pid $!" )
+    fi
     echo "→ watch it:  just sbx run cmd {{RUN_ID}} 'tail -f run.log'"

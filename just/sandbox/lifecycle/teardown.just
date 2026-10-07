@@ -8,7 +8,9 @@
 # that destroys it. Artifacts come out, commits are harvested, then the VM is
 # destroyed and the record closed. The harvest failing ABORTS the whole teardown:
 # destroying a VM whose commits were never pulled is the one irreversible mistake
-# available in this file.
+# available in this file. Step 2.5 sits between harvest and destroy: an issue
+# still open at that point means the run was cancelled, and closing it needs both
+# the pulled bundle (for the commits section) and a live VM (for the trace).
 #
 # Per-run cost is NOT captured here. It comes from pi's own accounting in the
 # trace db (`just obs sessions` shows `total_cost`), and setup gate D already
@@ -168,6 +170,24 @@ teardown RUN_ID *FLAGS:
         }
     else
         echo "   harvest: skipped (no vm)"
+    fi
+
+    # ── 2.5 issue tracking: a still-open issue means the run was cancelled ───
+    # Where step 2 is "bring the work home", this is "record that the run was cut
+    # short". `close` is idempotent (already-closed -> warn, exit 0), so the normal
+    # watcher-beat-teardown case costs one gh call and no churn. Best-effort: a
+    # failure here only prints the reconciliation command. SSSF_ISSUES=0 skips.
+    if [ "${SSSF_ISSUES:-1}" != "0" ]; then
+        ISSUE_NUM=$("$RR" get "$RUN_ID" issue_number 2>/dev/null || true)
+        if [ -n "$ISSUE_NUM" ]; then
+            HARVEST_NOTE=skipped
+            if [ "$HARVEST" = 1 ] && [ "$VM_ALIVE" = 1 ]; then HARVEST_NOTE=ran; fi
+            uv run sandbox_mount/host/issue_tracker.py close "$RUN_ID" --outcome cancelled \
+                --note "closed at teardown $(date -u +%Y-%m-%dT%H:%M:%SZ); VM ${VM:-gone}; harvest $HARVEST_NOTE" \
+                || echo "   issues: close-at-teardown failed (best-effort) — run 'just sbx manage sync-issues'"
+        fi
+    else
+        echo "   issues: disabled (SSSF_ISSUES=0)"
     fi
 
     # ── 3. destroy the vm -------------------------------------------------------

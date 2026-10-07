@@ -52,6 +52,15 @@ FIELDS = (
     "pid",
     "created_at",
     "closed_at",
+    # ── GitHub-issue tracking (sandbox_mount/host/issue_tracker.py) ─────────
+    # The tracker's view of this run's issue in the roster's app.repo. Added by
+    # the sanctioned field-extension path (same as `ports`): the schema stays
+    # closed, unknown keys are still rejected, and these four are the only
+    # fields the tracker may write. `set`/`get`/`close`/`list` are unchanged.
+    "issue_url",          # https://github.com/<owner>/<repo>/issues/<n>
+    "issue_number",       # int — the issue number in that repo
+    "issue_state",        # open | accepted | failed | cancelled (tracker's view)
+    "prev_issue_number",  # int — the issue this run's previous execute opened
 )
 
 # Identity, not state. run_id is also the filename, so rewriting it would leave
@@ -60,7 +69,8 @@ IMMUTABLE = ("run_id", "created_at")
 
 # CLI values arrive as strings. Per-field coercion instead of "try JSON first",
 # because a commit_sha of 5734129 is a string that happens to parse as a number.
-_COERCE = {"ports": "json", "pid": "int"}
+_COERCE = {"ports": "json", "pid": "int",
+           "issue_number": "int", "prev_issue_number": "int"}
 
 
 def _now() -> str:

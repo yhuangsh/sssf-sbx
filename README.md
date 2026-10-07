@@ -300,6 +300,51 @@ just sbx manage harvest my-run
 just sbx lifecycle teardown my-run
 ```
 
+### Session tracking (GitHub issues)
+
+Every `execute` opens **one GitHub issue per run in the app's own repo** (the
+roster's `app.repo`) before the SDLC starts, and closes it with the full audit
+record when the session ends. Target mode only: a vendored roster has no
+separate app repo and skips with a named message. Issue tracking is a durable
+record of instruction → outcome, independent of the disposable sandbox.
+
+What opens when:
+
+- **`just sbx lifecycle execute`** opens the issue *before* the detached SDLC
+  launches — title = your instruction verbatim (truncated to 200 chars, full text
+  in the body), label `sssf:running`, body carrying the instruction and the
+  provenance (run id, roster, factory sha, target HEAD, VM name + tag, chain,
+  created-at).
+- A host-side **watcher** (spawned by `execute`, same nohup pattern as the SDLC)
+  adds one coarse **milestone comment** mid-run and, when the session ends, the
+  **final comment**: phase timeline, review verdicts, target run-branch commits
+  `BASE..HEAD` with subjects, tokens + $ cost, the outcome reason verbatim, and
+  harvest status.
+- `just sbx lifecycle teardown` closes an issue still open at that point as
+  `cancelled`, with a state-at-teardown note.
+
+State labels:
+
+| label | meaning |
+|---|---|
+| `sssf:running` | issue open, session in flight |
+| `sssf:accepted` | session succeeded — closed as completed |
+| `sssf:failed` | session failed — closed as not planned, with failure forensics (failing phase, gate/review detail, error verbatim, surviving-state note) |
+| `sssf:cancelled` | torn down mid-run — closed as not planned |
+| `sssf:follow-up` | this run re-executes a run record whose previous session failed; the body links `Follow-up to #N` |
+
+- `SSSF_ISSUES=0` disables issue tracking entirely; `execute` prints a named skip.
+- Vendored mode (no `app.repo`) also skips with a named message — issues live in
+  the app's own repo, and vendored mode has no separate one.
+- `just sbx manage sync-issues` reconciles issues left open by a dead watcher or
+  a rebooted host, from the live VM or the teardown-pulled trace copy.
+
+**Credential boundary.** `gh` runs on the host only, against the engineer's own
+host credential store. The VM never sees a GitHub credential — the same reason
+`harvest` moves commits as a bundle rather than a push. The tracker's only VM
+contact is a read-only trace query over ssh, and issue bodies are redacted
+against host secret values before they leave the host.
+
 `mount` stops at `observe` on purpose; nothing ever chains `teardown`. The
 sandbox holds no git credential, which is why `harvest` moves commits as a
 bundle rather than a push. Other useful entries: `just sbx manage list` (all
