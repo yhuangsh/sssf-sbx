@@ -233,8 +233,16 @@ ui:
     eval "$OUT"
     cd .claude/skills/sssf/apps/visualizer
     bun install
-    (SSSF_DB="$DB" PORT="$API_PORT" bun run server/index.ts &)
-    PORT="$API_PORT" bunx vite --port "$UI_PORT" --strictPort
+    # Both servers are background children of THIS recipe shell with captured
+    # pids; the trap kills both on EXIT/INT/TERM. (The old `( … & )` double-
+    # detach orphaned the API server into init — ctrl-C killed vite but left
+    # the API port bound.)
+    SSSF_DB="$DB" PORT="$API_PORT" bun run server/index.ts & API_PID=$!
+    PORT="$API_PORT" bunx vite --port "$UI_PORT" --strictPort & VITE_PID=$!
+    trap 'kill $API_PID $VITE_PID 2>/dev/null' EXIT INT TERM
+    # Residual limit: SIGKILL of the recipe still orphans the children
+    # (untrappable) — acceptable; the parked general cleanup covers it.
+    wait
 
 # local arming preflight: host tools, SSSF_CONFIG, provider keys, payload
 doctor:
