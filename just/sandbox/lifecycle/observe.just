@@ -36,8 +36,9 @@ observe RUN_ID:
     # The factory clone is `app` relative to the exedev user's home, so this is
     # /home/exedev/app on a stock exeuntu VM. The app dir itself comes from the
     # roster's app.path (below); this visualizer path is factory machinery.
+    # OBS_DB is resolved from the roster's observability.db right after the probe
+    # below (a namespaced hello roster traces into local/hello/sssf.db).
     OBS_DIR='$HOME/app/.claude/skills/sssf/apps/visualizer'
-    OBS_DB='$HOME/app/adws/adw_data/sssf.db'
 
     echo "── observe {{RUN_ID}} · vm $VM ──────────────────────────────"
 
@@ -110,11 +111,13 @@ observe RUN_ID:
     emit("SERVE_COMMAND", serve.get("command") or "")
     emit("SERVE_PORT", serve.get("port") or 4501)
     emit("SERVE_HEALTH_PATH", serve.get("health_path") or "/")
+    emit("OBS_DB_REL", (cfg.get("observability") or {}).get("db") or "adws/adw_data/sssf.db")
     PROBE
     ) || { echo "observe: app-lane probe failed on $VM — VM left up for debugging" >&2; exit 1; }
     eval "$APP_ENV"
     APP_PORT="$SERVE_PORT"
     APP_DIR="\$HOME/app/$APP_PATH"      # expanded on the VM, not here
+    OBS_DB="\$HOME/app/$OBS_DB_REL"     # roster's observability.db, VM-expanded
 
     # ── 1. app on the manifest's declared port ───────────────────────────────
     # Idempotent: observe is safe to re-run, and `just sbx mount` ends here, so a

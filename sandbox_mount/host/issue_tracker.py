@@ -53,8 +53,26 @@ RUNS_DIR = REPO_ROOT / ".sandbox" / "runs"
 sys.path.insert(0, str(HOST_DIR))
 import run_record  # noqa: E402
 
-# The trace db inside the factory clone on the VM (provision.sh step 7).
-VM_DB = "/home/exedev/app/adws/adw_data/sssf.db"
+# The trace db inside the factory clone on the VM (provision.sh step 7), relative
+# to the factory root. This is the fallback; _roster_db_rel() reads the active
+# roster, and a namespaced local roster (adws/adw_data/local/<key>/sssf.db)
+# overrides it so the tracker follows the run's own db — not the kernel's.
+VM_DB_REL = "adws/adw_data/sssf.db"
+
+
+def _roster_db_rel() -> str:
+    """The active roster's observability.db (relative), best-effort fallback."""
+    roster = os.environ.get("SSSF_CONFIG", "").strip()
+    if roster and Path(roster).is_file():
+        try:
+            import yaml
+            db = (yaml.safe_load(Path(roster).read_text()) or {}).get("observability") or {}
+            rel = db.get("db")
+            if rel:
+                return str(rel)
+        except Exception:
+            pass
+    return VM_DB_REL
 
 # The five state labels. `--force` on create makes ensure_labels idempotent.
 LABELS = {
@@ -334,8 +352,11 @@ def _ssh(host: str, command: str, timeout: int = 25) -> subprocess.CompletedProc
                           capture_output=True, text=True, timeout=timeout)
 
 
-def _vm_trace(vm: str, since: str | None, adw: str | None, dbpath: str = VM_DB) -> dict:
+def _vm_trace(vm: str, since: str | None, adw: str | None,
+              dbpath: str | None = None) -> dict:
     """Read the trace over ssh with python3 + stdlib sqlite3 (no sqlite3 CLI)."""
+    if dbpath is None:
+        dbpath = f"/home/exedev/app/{_roster_db_rel()}"
     script = (_REMOTE_SCRIPT
               .replace("__DB__", repr(dbpath))
               .replace("__SINCE__", repr(since))
@@ -353,7 +374,7 @@ def _vm_trace(vm: str, since: str | None, adw: str | None, dbpath: str = VM_DB) 
 
 
 def _artifact_db(run_id: str) -> Path:
-    return RUNS_DIR / f"{run_id}-artifacts" / "adws" / "adw_data" / "sssf.db"
+    return RUNS_DIR / f"{run_id}-artifacts" / _roster_db_rel()
 
 
 def _trace(run_id: str, db: str | None = None, since: str | None = None,
@@ -369,7 +390,7 @@ def _trace(run_id: str, db: str | None = None, since: str | None = None,
     data: dict | None = None
     source = "none"
     if _is_local(rec):
-        host_db = REPO_ROOT / "adws" / "adw_data" / "sssf.db"
+        host_db = REPO_ROOT / _roster_db_rel()
         if host_db.is_file():
             data, source = _read_db(str(host_db), since, adw), str(host_db)
     elif db and Path(db).is_file():

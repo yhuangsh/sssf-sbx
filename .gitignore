@@ -147,6 +147,8 @@ temp/
 
 # sssf runtime
 adws/adw_data/sessions/
+# Local-mode per-project state: namespaced dbs, session dirs, ui.port files
+adws/adw_data/local/
 # Unanchored: a trace db is never committed, wherever it turns up. Two empty
 # ones had been tracked — adws/sssf.db and templates/adws/sssf.db, the second
 # of which would have stamped a fake trace db into every target repo.

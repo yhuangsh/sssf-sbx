@@ -80,7 +80,17 @@ teardown RUN_ID *FLAGS:
       a && /^[[:space:]]+manifest:[[:space:]]/ { print $2; exit }
     ' "$ROSTER")
     [ -n "$APP_MANIFEST" ] || APP_MANIFEST=sssf.app.yaml
-    TAR_PATHS="specs app_docs adws/adw_data/sssf.db run.log"
+    # The trace db path is roster data (a namespaced local roster keeps its db
+    # under adws/adw_data/local/<key>/). The tar is relative to the factory root
+    # on the VM, so the artifact lands at .sandbox/runs/<id>-artifacts/<DB_REL>
+    # on the host — which _artifact_db() in issue_tracker.py mirrors.
+    DB_REL=$(awk '
+      /^observability:[[:space:]]*$/ { o=1; next }
+      /^[^[:space:]]/                { o=0 }
+      o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    DB_REL=${DB_REL:-adws/adw_data/sssf.db}
+    TAR_PATHS="specs app_docs $DB_REL run.log"
     if [ -n "$APP_REPO" ]; then
         [ -n "$APP_PATH" ] || APP_PATH=target
         TAR_PATHS="$TAR_PATHS $APP_PATH/$APP_MANIFEST"

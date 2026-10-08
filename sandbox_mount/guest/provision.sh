@@ -322,7 +322,11 @@ sys.path.insert(0, "adws")          # the import root `uv run adws/adw_*.py` get
 from adw_modules.agents import load_config
 from adw_modules.tracer import Tracer
 
-cfg = load_config()
+# Prefer the FILL-shipped roster the VM's chains actually run with (setup copies
+# it to /home/exedev/sssf_config.yaml); the no-arg kernel default would create
+# the trace db at a different path than observe/execute expect.
+roster = "/home/exedev/sssf_config.yaml"
+cfg = load_config(roster if Path(roster).is_file() else "adws/adw_sssf_config/sssf.config.yaml")
 db = Path(cfg.observability.db)
 # Tracer only mkdirs the events file's PARENT, so passing the sessions dir
 # itself creates that dir and leaves no stray session behind.

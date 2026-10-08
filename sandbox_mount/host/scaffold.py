@@ -605,6 +605,34 @@ def write_roster(owner: str, name: str, ref: str, visibility: str,
         block.append(f"  local_path: {local_path}      # LOCAL mode payload (just local …)")
     block.append("")
     body = template[:app_idx] + block + template[agents_idx:]
+
+    # The hello template now namespaces its runtime state under local/hello;
+    # every scaffolded roster must own its OWN namespace or all scaffolded apps
+    # interleave into one db. Derive the key from the FINAL roster filename (the
+    # rename path above can change <name>), and rewrite ONLY the value token of
+    # the data_dir/db lines, line-wise: a YAML round-trip would drop the
+    # template's comments (mount.just and manage/mod.just parse this with awk).
+    key = roster.name
+    if key.startswith("sssf."):
+        key = key[len("sssf."):]
+    if key.endswith(".config.yaml"):
+        key = key[: -len(".config.yaml")]
+    key = key or "kernel"
+
+    patched: list[str] = []
+    seen_data_dir = seen_db = False
+    for line in body:
+        if not seen_data_dir and re.match(r"^\s*data_dir:\s*\S", line):
+            line = re.sub(r"^(\s*data_dir:\s*)\S+",
+                          rf"\g<1>adws/adw_data/local/{key}", line, count=1)
+            seen_data_dir = True
+        elif not seen_db and re.match(r"^\s*db:\s*\S", line):
+            line = re.sub(r"^(\s*db:\s*)\S+",
+                          rf"\g<1>adws/adw_data/local/{key}/sssf.db", line, count=1)
+            seen_db = True
+        patched.append(line)
+    body = patched
+
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     entry = "just local scaffold" if local_path else "just sbx scaffold"
     header = [
@@ -623,12 +651,26 @@ def write_roster(owner: str, name: str, ref: str, visibility: str,
     }
     if local_path:
         expected["local_path"] = local_path
-    for key, want in expected.items():
-        if app.get(key) != want:
-            raise ScaffoldError(f"generated roster app.{key} is {app.get(key)!r}, expected {want!r}")
+    for field, want in expected.items():
+        if app.get(field) != want:
+            raise ScaffoldError(f"generated roster app.{field} is {app.get(field)!r}, expected {want!r}")
+
+    defaults = data.get("defaults") or {}
+    observability = data.get("observability") or {}
+    want_data_dir = f"adws/adw_data/local/{key}"
+    want_db = f"adws/adw_data/local/{key}/sssf.db"
+    if defaults.get("data_dir") != want_data_dir:
+        raise ScaffoldError(
+            f"generated roster defaults.data_dir is {defaults.get('data_dir')!r}, expected {want_data_dir!r}"
+        )
+    if observability.get("db") != want_db:
+        raise ScaffoldError(
+            f"generated roster observability.db is {observability.get('db')!r}, expected {want_db!r}"
+        )
 
     roster.write_text(text)
     print(f"[scaffold] wrote roster: {roster.name} (in the current directory, left untracked — NOT committed)")
+    print(f"[scaffold]    trace dir: {want_data_dir}/ (isolated per project)")
     return roster
 
 

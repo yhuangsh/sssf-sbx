@@ -117,6 +117,10 @@ mount RUN_ID:
         echo "[local mount] manifest '$APP_MANIFEST' missing at $LOCAL_PATH/$APP_MANIFEST — the app is not sssf-armed" >&2
         exit 1
     fi
+
+    # ── app serve-port awareness (advisory — never blocks the mount) ──────────
+    uv run sandbox_mount/host/serve_ports.py || true
+
     if [ -n "$(git -C "$LOCAL_PATH" status --porcelain)" ]; then
         echo "[local mount] working tree at $LOCAL_PATH is dirty — the run branch must start clean; commit or stash first" >&2
         exit 1
@@ -204,16 +208,24 @@ execute RUN_ID CHAIN PROMPT:
     fi
     exit "$RC"
 
-# serve the trace visualizer against the local adws/adw_data/sssf.db
+# serve the trace visualizer against THE PROJECT'S db, on a stable per-project
+# port pair recorded in <db dir>/ui.port (UI port; api is UI+1). A re-run is
+# idempotent, and a recorded port held by something else warns + auto-bumps.
 ui:
     #!/usr/bin/env bash
     set -euo pipefail
-    DB="$(pwd -P)/adws/adw_data/sssf.db"
-    echo "→ visualizer: http://localhost:4601  (api :4600, db: adws/adw_data/sssf.db)"
+    ROSTER=$(sandbox_mount/host/require_sssf_config.sh)
+    OUT=$(uv run sandbox_mount/host/local_ui.py "$ROSTER") || {
+        rc=$?
+        if [ "$rc" -eq 10 ]; then exit 0; fi   # already running; script printed the URL
+        exit "$rc"
+    }
+    eval "$OUT"
+    echo "→ visualizer: http://localhost:$UI_PORT  (api :$API_PORT, db: $DB)"
     cd .claude/skills/sssf/apps/visualizer
     bun install
-    (SSSF_DB="$DB" bun run server/index.ts &)
-    bunx vite
+    (SSSF_DB="$DB" PORT="$API_PORT" bun run server/index.ts &)
+    PORT="$API_PORT" bunx vite --port "$UI_PORT" --strictPort
 
 # local arming preflight: host tools, SSSF_CONFIG, provider keys, payload
 doctor:
@@ -270,6 +282,10 @@ doctor:
             ok=1
         fi
     fi
+
+    # ── app serve-port awareness (advisory: WARN-only, never sets ok=1) ──────
+    echo "  ── app serve ports (advisory) ──"
+    uv run sandbox_mount/host/serve_ports.py || true
 
     [ "$ok" -eq 0 ] && echo "  local doctor: OK" || { echo "  local doctor: FAILED"; exit 1; }
 

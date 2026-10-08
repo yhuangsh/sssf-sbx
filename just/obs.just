@@ -4,6 +4,10 @@
 # working-directory points at the repo root because every query below is a path
 # relative to it. This namespace is meant to work INSIDE a sandbox too — reading your
 # own traces is exactly what you want inside a sandbox.
+#
+# The db is resolved from the active roster's `observability.db` (relative paths
+# from the repo root), so a namespaced local roster reads ITS OWN trace, not the
+# kernel's; the fallback is the historical adws/adw_data/sssf.db.
 set working-directory := '..'
 set positional-arguments
 
@@ -37,19 +41,51 @@ rosters: _require-sssf-config
 
 # recent sessions
 sessions: _require-sssf-config
-    sqlite3 adws/adw_data/sssf.db "select adw_id, status, substr(request,1,60), total_tokens, round(total_cost,4) from sessions order by started_at desc limit 10;"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DB=$(awk '
+      /^observability:[[:space:]]*$/ { o=1; next }
+      /^[^[:space:]]/                { o=0 }
+      o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
+    ' "$SSSF_CONFIG")
+    DB=${DB:-adws/adw_data/sssf.db}
+    sqlite3 "$DB" "select adw_id, status, substr(request,1,60), total_tokens, round(total_cost,4) from sessions order by started_at desc limit 10;"
 
 # phases for one adw: just obs phases <adw_id>
 phases ADW_ID: _require-sssf-config
-    sqlite3 adws/adw_data/sssf.db "select seq, name, kind, owner, status, attempt from phases where adw_id='{{ADW_ID}}' order by seq;"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DB=$(awk '
+      /^observability:[[:space:]]*$/ { o=1; next }
+      /^[^[:space:]]/                { o=0 }
+      o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
+    ' "$SSSF_CONFIG")
+    DB=${DB:-adws/adw_data/sssf.db}
+    sqlite3 "$DB" "select seq, name, kind, owner, status, attempt from phases where adw_id='{{ADW_ID}}' order by seq;"
 
 # live event tail for one adw: just obs tail <adw_id>
 tail ADW_ID: _require-sssf-config
-    sqlite3 adws/adw_data/sssf.db "select rowid, type, name, started_at from events where adw_id='{{ADW_ID}}' order by rowid desc limit 25;"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DB=$(awk '
+      /^observability:[[:space:]]*$/ { o=1; next }
+      /^[^[:space:]]/                { o=0 }
+      o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
+    ' "$SSSF_CONFIG")
+    DB=${DB:-adws/adw_data/sssf.db}
+    sqlite3 "$DB" "select rowid, type, name, started_at from events where adw_id='{{ADW_ID}}' order by rowid desc limit 25;"
 
 # what a run is running right now: just obs procs <adw_id>
 procs ADW_ID: _require-sssf-config
-    sqlite3 adws/adw_data/sssf.db "select kind, name, pid, command, started_at from processes where adw_id='{{ADW_ID}}' and ended_at is null order by id;"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DB=$(awk '
+      /^observability:[[:space:]]*$/ { o=1; next }
+      /^[^[:space:]]/                { o=0 }
+      o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
+    ' "$SSSF_CONFIG")
+    DB=${DB:-adws/adw_data/sssf.db}
+    sqlite3 "$DB" "select kind, name, pid, command, started_at from processes where adw_id='{{ADW_ID}}' and ended_at is null order by id;"
 
 # Verifies each pid still looks like the thing we recorded; pids get recycled.
 
@@ -57,7 +93,13 @@ procs ADW_ID: _require-sssf-config
 kill ADW_ID: _require-sssf-config
     #!/usr/bin/env bash
     set -uo pipefail
-    rows=$(sqlite3 adws/adw_data/sssf.db "select kind||' '||pid from processes where adw_id='{{ADW_ID}}' and ended_at is null order by case kind when 'agent' then 0 else 1 end, id desc;")
+    DB=$(awk '
+      /^observability:[[:space:]]*$/ { o=1; next }
+      /^[^[:space:]]/                { o=0 }
+      o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
+    ' "$SSSF_CONFIG")
+    DB=${DB:-adws/adw_data/sssf.db}
+    rows=$(sqlite3 "$DB" "select kind||' '||pid from processes where adw_id='{{ADW_ID}}' and ended_at is null order by case kind when 'agent' then 0 else 1 end, id desc;")
     [ -z "$rows" ] && { echo "no live processes recorded for {{ADW_ID}}"; exit 0; }
     while read -r kind pid; do
         [ -z "${pid:-}" ] && continue
@@ -69,9 +111,18 @@ kill ADW_ID: _require-sssf-config
         esac
     done <<< "$rows"
 
-# The db path resolves against the server's cwd, and the server runs from the
-# app dir — so it is passed explicitly rather than left to be discovered.
+# The db path is resolved from the roster's observability.db (per-project for
+# local rosters) and passed explicitly rather than left to be discovered: the
+# db path resolves against the server's cwd, and the server runs from the app dir.
 
 # boot the observability UI (server :4600 + vite dev)
 ui: _require-sssf-config
-    cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{invocation_directory()}}/adws/adw_data/sssf.db bun run server/index.ts &) && bunx vite
+    #!/usr/bin/env bash
+    set -euo pipefail
+    DB=$(awk '
+      /^observability:[[:space:]]*$/ { o=1; next }
+      /^[^[:space:]]/                { o=0 }
+      o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
+    ' "$SSSF_CONFIG")
+    DB=${DB:-adws/adw_data/sssf.db}
+    cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{invocation_directory()}}/"$DB" bun run server/index.ts &) && bunx vite

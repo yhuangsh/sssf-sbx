@@ -421,7 +421,7 @@ just local mount my-run
 just local execute my-run sdlc "add X"
 just local execute my-run simple-sdlc "add X"   # pick another chain from `just adw`
 
-# the trace visualizer, against the local adws/adw_data/sssf.db
+# the trace visualizer, against THIS project's trace db (per-project port)
 just local ui
 
 # or boot an orchestrator that drives mount/execute/ui for you
@@ -437,6 +437,61 @@ app:
   ref: main
   manifest: sssf.app.yaml
   local_path: /Users/you/projects/<name>   # LOCAL mode payload (this lane)
+```
+
+### Local projects: isolation and ports
+
+Multiple local projects can run on one host without stepping on each other.
+The **project key** is the roster filename's middle part — `sssf.<key>.config.yaml`
+→ `<key>`; the bare `sssf.config.yaml` → `kernel` — and it namespaces that
+project's runtime state:
+
+```
+adws/adw_data/                  kernel's own trace (sssf.config.yaml)
+adws/adw_data/local/<key>/      every other project
+  sssf.db                         its trace db (roster observability.db)
+  sessions/                       its session dirs (roster defaults.data_dir)
+  ui.port                         the recorded visualizer UI port (one integer)
+```
+
+`just local scaffold` writes the namespaced `defaults.data_dir` /
+`observability.db` for `<name>` automatically, so every scaffolded project is
+isolated out of the box; the shipped hello roster is `local/hello`. `just obs …`
+and `just local ui` both resolve the db from the active roster (`SSSF_CONFIG`),
+so they read the project's own trace, not the kernel's.
+
+**Port rules.** `just local ui` records a **stable per-project port** in
+`<db dir>/ui.port`. On first use it allocates the first free pair scanning
+upward from **4620**; the recorded integer `P` is the Vite (UI) port and the
+API server binds `P+1`. A pair is usable only if both ports are free. The
+recorded pair is reused on the next run. When the recorded port is held by
+a process that is **not** this project's visualizer, the recipe prints a named
+warning, bumps to the next free pair, and updates the file:
+
+```
+[local ui] WARNING: recorded port <P> for project '<key>' is held by a process that is not our visualizer — moving to <P'> (recorded in <port file>)
+```
+
+A re-run while the visualizer is already live is **idempotent**: it prints
+`→ visualizer already running: http://localhost:<P> (api :<P+1>, db: <db>)` and
+exits 0 without starting a second server. Every run prints which db it serves.
+
+**Serve-port awareness.** The kernel cannot rebind an app's port — the app's
+manifest (`serve.port`) owns it. So `just local doctor` (and `just local mount`,
+as an advisory) scan every local roster, resolve each manifest's `serve.port`,
+print the per-project port map, and warn — never block — on conflicts. A
+**declared collision** (two projects name the same port):
+
+```
+WARNING [serve-port] collision: port <P> declared by '<key1>' (<manifest1>) and '<key2>' (<manifest2>)
+  either stop the other project's server, or change serve.port in <manifest1> or <manifest2>, or run yours with PORT=<free> if the app honors it
+```
+
+A **live-bound** port (something is already listening on a declared port):
+
+```
+WARNING [serve-port] port <P> declared by '<key>' is currently bound on this host — if that server is not '<key>'s own
+  either stop the other project's server, or change serve.port in <manifest>, or run yours with PORT=<free> if the app honors it
 ```
 
 ### The tradeoffs — read this before choosing the lane

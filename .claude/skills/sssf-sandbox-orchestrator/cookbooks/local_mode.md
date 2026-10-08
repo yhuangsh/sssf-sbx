@@ -91,8 +91,11 @@ See [execute_work.md](execute_work.md) for picking a chain and the delegation co
 
 ## Watch the trace
 
-- **`just local ui`** serves the shipped visualizer against the local trace db
-  (`adws/adw_data/sssf.db`) and prints the URL. `just obs …` reads the same db.
+- **`just local ui`** serves the shipped visualizer against **this project's** trace db — the active
+  roster's `observability.db` (a namespaced local roster keeps it at
+  `adws/adw_data/local/<key>/sssf.db`) — and prints which db it serves. It records a stable
+  per-project UI port in `<db dir>/ui.port` (allocated from 4620 upward; the API runs on port+1); a
+  re-run against a live instance prints the URL and exits 0. `just obs …` reads the same roster db.
 
 ## Issues, and the boundary
 
