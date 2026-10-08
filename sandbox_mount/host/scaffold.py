@@ -24,12 +24,18 @@ manifest is parsed back BEFORE any push, so a scaffold bug cannot land a broken
 manifest on GitHub.
 
 Usage:
-    uv run sandbox_mount/host/scaffold.py [owner/name]
+    uv run sandbox_mount/host/scaffold.py [--preset local|sandbox] [owner/name]
 
 The optional argument pre-fills the repo-name answer (bare Enter accepts it).
 Every prompt reads exactly ONE line, so the whole flow is drivable by a piped
 here-doc. pyyaml only, on purpose — this runs on the host before any toolchain
 exists, like run_record.py.
+
+The PRESET picks the lane the roster is armed for (`--preset sandbox`, the
+default, is byte-identical to the original behaviour — `just sbx scaffold`).
+`--preset local` additionally clones the repo to a host `local_path` OUTSIDE the
+kernel and writes `local_path:` into the generated `app:` block, so the roster
+is ready for `just local mount` — no VM.
 
 `gh` is a HARD dependency of this one command: both `command -v gh` and
 `gh auth status` are checked up front, with named guidance on failure.
@@ -296,6 +302,26 @@ def git_commit(cwd: Path, message: str) -> None:
     run(["git", *git_identity(), "commit", "-m", message], cwd=cwd)
 
 
+def is_git_repo(path: Path) -> bool:
+    """True when `path` is already a clone. Exits 1 when unset, so it must NOT
+    go through run()'s check — same reason as git_identity's git config probes."""
+    return subprocess.run(["git", "-C", str(path), "rev-parse", "--git-dir"],
+                          capture_output=True, text=True).returncode == 0
+
+
+def clone_local(owner: str, name: str, local_path: Path, ref: str) -> None:
+    """Clone the app repo to the host `local_path` for the LOCAL lane. A clone
+    that already exists is left alone — never destructive."""
+    if is_git_repo(local_path):
+        print(f"[scaffold] local clone already exists at {local_path} — leaving it as-is")
+        return
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    run(["gh", "repo", "clone", f"{owner}/{name}", str(local_path)])
+    if ref:
+        run(["git", "-C", str(local_path), "checkout", ref])
+    print(f"[scaffold] cloned {owner}/{name} -> {local_path}")
+
+
 # ── prompts ──────────────────────────────────────────────────────────────────
 
 
@@ -533,7 +559,8 @@ def check_private_token() -> None:
 # ── roster ───────────────────────────────────────────────────────────────────
 
 
-def write_roster(owner: str, name: str, ref: str, visibility: str) -> Path:
+def write_roster(owner: str, name: str, ref: str, visibility: str,
+                 local_path: str | None = None) -> Path:
     # The roster is the USER's file: written to the repo root (where .env and the
     # justfile live), never committed. If it already exists we ASK — overwrite,
     # rename, or abort — and never clobber silently.
@@ -573,12 +600,15 @@ def write_roster(owner: str, name: str, ref: str, visibility: str) -> Path:
         f"  ref: {ref}",
         "  path: target",
         "  manifest: sssf.app.yaml",
-        "",
     ]
+    if local_path:
+        block.append(f"  local_path: {local_path}      # LOCAL mode payload (just local …)")
+    block.append("")
     body = template[:app_idx] + block + template[agents_idx:]
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    entry = "just local scaffold" if local_path else "just sbx scaffold"
     header = [
-        f"# {roster.name} — SCAFFOLDED by 'just sbx scaffold' on {today}",
+        f"# {roster.name} — SCAFFOLDED by '{entry}' on {today}",
         f"# app repo: https://github.com/{owner}/{name} ({visibility}) — everything below is the shipped hello template with the app: block filled in.",
     ]
     text = "\n".join(header + body) + "\n"
@@ -591,6 +621,8 @@ def write_roster(owner: str, name: str, ref: str, visibility: str) -> Path:
         "path": "target",
         "manifest": "sssf.app.yaml",
     }
+    if local_path:
+        expected["local_path"] = local_path
     for key, want in expected.items():
         if app.get(key) != want:
             raise ScaffoldError(f"generated roster app.{key} is {app.get(key)!r}, expected {want!r}")
@@ -624,7 +656,33 @@ def preflight() -> None:
         )
 
 
+def parse_preset(argv: list[str]) -> tuple[str, list[str]]:
+    """Pull `--preset local|sandbox` (also `--preset=...`) out of argv. Default
+    sandbox, so `just sbx scaffold`'s call keeps today's behaviour byte-identical."""
+    preset = "sandbox"
+    rest: list[str] = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--preset":
+            if i + 1 >= len(argv):
+                raise ScaffoldError("--preset needs a value: local|sandbox")
+            preset = argv[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--preset="):
+            preset = arg.split("=", 1)[1]
+            i += 1
+            continue
+        rest.append(arg)
+        i += 1
+    if preset not in ("local", "sandbox"):
+        raise ScaffoldError(f"unknown preset {preset!r} — use local or sandbox")
+    return preset, rest
+
+
 def main(argv: list[str]) -> int:
+    preset, argv = parse_preset(argv)
     preflight()
     prefill = argv[0] if argv else ""
 
@@ -705,6 +763,19 @@ def main(argv: list[str]) -> int:
     elif ask_yn(f"add the default test check ({' '.join(default_checks)})?", True):
         checks = default_checks
 
+    # ── 5b. local path (LOCAL preset only; the sandbox preset never asks) ──────
+    # The clone goes OUTSIDE the kernel — the kernel is never the payload of an
+    # app run. Expanded absolute, so the written roster is unambiguous.
+    local_path: Path | None = None
+    local_path_str: str | None = None
+    if preset == "local":
+        answered = ask("local path for the clone", f"~/projects/{name}")
+        local_path = Path(answered).expanduser()
+        if not local_path.is_absolute():
+            local_path = Path.cwd() / local_path
+        local_path = local_path.resolve()
+        local_path_str = str(local_path)
+
     # ── 6. summary + the one gate ────────────────────────────────────────────
     roster_rel = f"sssf.{name}.config.yaml"
     print("\n──────────────────────────────────────────────────────────────")
@@ -716,6 +787,8 @@ def main(argv: list[str]) -> int:
     print(f"  serve:       {'off' if serve is None else serve['command'] + ' on :' + str(serve['port']) + serve['health_path']}")
     print(f"  checks:      {'none' if checks is None else 'test: ' + ' '.join(checks)}")
     print(f"  manifest:    sssf.app.yaml (validated before any push)")
+    if local_path_str:
+        print(f"  local_path:  {local_path_str} (LOCAL mode — clone on the host, OUTSIDE the kernel)")
     if mode == "create":
         print(f"  actions:     gh repo create {owner}/{name} --{visibility} --push")
     else:
@@ -741,12 +814,17 @@ def main(argv: list[str]) -> int:
         else:
             print(f"[scaffold] {owner}/{name} already satisfied — nothing pushed")
 
+    # ── 2b'. LOCAL preset: clone the repo to local_path (host-side payload) ──
+    if local_path is not None:
+        clone_local(owner, name, local_path, default_branch)
+
     # ── 3'. private-repo token ───────────────────────────────────────────────
     if visibility == "private":
         check_private_token()
 
     # ── 4'. roster ───────────────────────────────────────────────────────────
-    roster_path = write_roster(owner, name, default_branch, visibility)
+    roster_path = write_roster(owner, name, default_branch, visibility,
+                               local_path=local_path_str)
 
     # ── 5'. finish ───────────────────────────────────────────────────────────
     print(f"\n[scaffold] done — {owner}/{name} ({visibility}) + roster {roster_path.name} "
@@ -754,11 +832,20 @@ def main(argv: list[str]) -> int:
     print("next steps:")
     print(f"  1. point SSSF_CONFIG at it, in .env or inline:   SSSF_CONFIG={roster_path.name}")
     print("                                                   (relative roster paths resolve from this repo root)")
-    print("  2. preflight:     just sbx manage doctor")
-    print("  3. mount:         just sbx mount <run-id>")
-    print("note: the roster is untracked. Committing it into the kernel repo (e.g. to share it")
-    print("      with your team) is your choice — scaffold never touches the kernel's git history.")
-    print("lanes: 'just sbx run agent' steers; 'just sbx lifecycle execute' is the factory.")
+    if preset == "local":
+        print("  2. preflight:     just local doctor")
+        print("  3. mount:         just local mount <run-id>")
+        print("note: the roster is untracked. Committing it into the kernel repo (e.g. to share it")
+        print("      with your team) is your choice — scaffold never touches the kernel's git history.")
+        print("lanes: 'just local execute <run-id> sdlc \"<prompt>\"' runs the chain on your machine;")
+        print("       'just local ui' serves the trace. There is no VM and no teardown — the run")
+        print("       branch sbx/<run-id> in the clone is the boundary; push when ready.")
+    else:
+        print("  2. preflight:     just sbx manage doctor")
+        print("  3. mount:         just sbx mount <run-id>")
+        print("note: the roster is untracked. Committing it into the kernel repo (e.g. to share it")
+        print("      with your team) is your choice — scaffold never touches the kernel's git history.")
+        print("lanes: 'just sbx run agent' steers; 'just sbx lifecycle execute' is the factory.")
     return 0
 
 

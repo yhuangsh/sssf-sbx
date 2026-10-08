@@ -63,6 +63,7 @@ LABELS = {
     "sssf:failed":    ("d93f0b", "SSSF session failed"),
     "sssf:cancelled": ("fbca04", "SSSF session torn down mid-run"),
     "sssf:follow-up": ("5319e7", "SSSF re-run of a failed session"),
+    "sssf:local":     ("0075ca", "SSSF session ran on the host (local mode)"),
 }
 
 _SECRET_NAME = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD)", re.IGNORECASE)
@@ -179,8 +180,10 @@ def _repo_from_record(rec: dict | None) -> str:
 
 
 # ── roster resolution ───────────────────────────────────────────────────────
-def _app_config() -> tuple[str, str]:
-    """(app.repo, app.path) from the active roster. Raises with THE named error."""
+def _app_config() -> tuple[str, str, str]:
+    """(app.repo, app.path, app.local_path) from the active roster. Raises with
+    THE named error. local_path is expanded (~) and empty when unset — in LOCAL
+    mode the payload is that clone, not `<repo_root>/<path>`."""
     path = os.environ.get("SSSF_CONFIG")
     if not path:
         raise RuntimeError(
@@ -195,7 +198,10 @@ def _app_config() -> tuple[str, str]:
     app = data.get("app") or {}
     repo = str(app.get("repo") or "").strip()
     app_path = str(app.get("path") or "").strip() or "target"
-    return repo, app_path
+    local_path = str(app.get("local_path") or "").strip()
+    if local_path:
+        local_path = str(Path(local_path).expanduser())
+    return repo, app_path, local_path
 
 
 def _app_path_quiet() -> str:
@@ -203,6 +209,22 @@ def _app_path_quiet() -> str:
         return _app_config()[1]
     except Exception:
         return "target"
+
+
+def _local_path_quiet() -> str:
+    try:
+        return _app_config()[2]
+    except Exception:
+        return ""
+
+
+def _is_local(rec: dict | None, explicit: bool = False) -> bool:
+    """A run is local when the explicit flag is set OR its record says so — a
+    `vm_name` of "local" (a free string; the sandbox lanes never set it). This
+    is what keeps the tracker away from ssh to local.exe.xyz."""
+    if explicit:
+        return True
+    return bool(rec and str(rec.get("vm_name") or "") == "local")
 
 
 def _roster_name() -> str:
@@ -338,14 +360,19 @@ def _trace(run_id: str, db: str | None = None, since: str | None = None,
            adw: str | None = None, record: dict | None = None) -> dict:
     """Trace dict with session/phases/gates/envelopes plus source and commits.
 
-    Priority: an explicit --db copy (sync), else the live VM, else the
-    teardown-pulled artifact copy. A VM that no longer answers falls through to
-    the artifact copy rather than failing the caller.
+    Priority: LOCAL mode reads the HOST db directly (never ssh — a vm_name of
+    "local" would otherwise try local.exe.xyz); else an explicit --db copy
+    (sync); else the live VM; else the teardown-pulled artifact copy. A VM that
+    no longer answers falls through to the artifact copy rather than failing.
     """
     rec = record if record is not None else get_record(run_id)
     data: dict | None = None
     source = "none"
-    if db and Path(db).is_file():
+    if _is_local(rec):
+        host_db = REPO_ROOT / "adws" / "adw_data" / "sssf.db"
+        if host_db.is_file():
+            data, source = _read_db(str(host_db), since, adw), str(host_db)
+    elif db and Path(db).is_file():
         data, source = _read_db(db, since, adw), str(db)
     elif rec and rec.get("vm_name"):
         try:
@@ -370,6 +397,14 @@ def _commits(run_id: str, rec: dict | None) -> list[str]:
     base = rec.get("commit_sha")
     if not base:
         return []
+    if _is_local(rec):
+        local = _local_path_quiet()
+        if local:
+            r = subprocess.run(["git", "-C", local, "log", "--format=%h %s",
+                                f"{base}..HEAD"], capture_output=True, text=True)
+            if r.returncode == 0:
+                return [l for l in r.stdout.splitlines() if l.strip()]
+        return []
     vm = rec.get("vm_name")
     if vm:
         repo_dir = f"app/{_app_path_quiet()}"
@@ -386,7 +421,7 @@ def _commits(run_id: str, rec: dict | None) -> list[str]:
     repo = _repo_from_url(rec.get("issue_url")) or ""
     if not repo:
         try:
-            repo, _ = _app_config()
+            repo, _, _ = _app_config()
         except Exception:
             repo = ""
     if repo:
@@ -401,7 +436,12 @@ def _commits(run_id: str, rec: dict | None) -> list[str]:
     return []
 
 
-def _harvest_status(run_id: str, rec: dict | None, commits: list[str]) -> str:
+def _harvest_status(run_id: str, rec: dict | None, commits: list[str],
+                    local: bool = False) -> str:
+    if local:
+        payload = _local_path_quiet() or "<local_path>"
+        return (f"local mode — commits are on branch `sbx/{run_id}` in `{payload}`; "
+                "push when ready (no bundle)")
     bundle = RUNS_DIR / f"{run_id}.bundle"
     if not bundle.is_file():
         return (f"not harvested — no bundle at `{bundle.relative_to(REPO_ROOT)}` "
@@ -497,30 +537,42 @@ def _fmt_gates(gates: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _provenance_rows(rec: dict, chain: str | None) -> str:
-    rows = [
-        ("run id", rec.get("run_id")),
-        ("roster", _roster_name()),
-        ("factory sha", rec.get("factory_sha")),
-        ("target HEAD (base)", rec.get("commit_sha")),
-        ("vm", rec.get("vm_name")),
-        ("vm tag", rec.get("tag")),
-        ("chain", chain or "(filled at first update)"),
-        ("created", rec.get("created_at")),
-    ]
+def _provenance_rows(rec: dict, chain: str | None, local: bool = False) -> str:
+    if local:
+        rows = [
+            ("run id", rec.get("run_id")),
+            ("roster", _roster_name()),
+            ("factory sha", rec.get("factory_sha")),
+            ("payload HEAD (base)", rec.get("commit_sha")),
+            ("payload", _local_path_quiet() or "(local)"),
+            ("chain", chain or "(filled at first update)"),
+            ("created", rec.get("created_at")),
+        ]
+    else:
+        rows = [
+            ("run id", rec.get("run_id")),
+            ("roster", _roster_name()),
+            ("factory sha", rec.get("factory_sha")),
+            ("target HEAD (base)", rec.get("commit_sha")),
+            ("vm", rec.get("vm_name")),
+            ("vm tag", rec.get("tag")),
+            ("chain", chain or "(filled at first update)"),
+            ("created", rec.get("created_at")),
+        ]
     body = ["| field | value |", "|---|---|"]
     for k, v in rows:
         body.append(f"| {k} | {v if v not in (None, '') else '—'} |")
     return "\n".join(body)
 
 
-def _open_body(rec: dict, instruction: str, chain: str | None, prev: int | None) -> str:
+def _open_body(rec: dict, instruction: str, chain: str | None, prev: int | None,
+               local: bool = False) -> str:
     parts = []
     if prev:
         parts.append(f"> **Follow-up to #{prev}** — the previous session on this run "
                      f"record failed.")
     parts.append("## Instruction\n\n```text\n" + (instruction or "") + "\n```")
-    parts.append("## Provenance\n\n" + _provenance_rows(rec, chain))
+    parts.append("## Provenance\n\n" + _provenance_rows(rec, chain, local=local))
     return "\n\n".join(parts)
 
 
@@ -534,7 +586,7 @@ def _milestone_body(milestone: str, trace: dict) -> str:
             f"### Cost so far\n\n{_fmt_cost(session)}")
 
 
-def _failure_forensics(trace: dict, rec: dict) -> str:
+def _failure_forensics(trace: dict, rec: dict, local: bool = False) -> str:
     phases = trace.get("phases") or []
     failing = [p for p in phases if str(p.get("status")).lower() == "fail"]
     lines = ["### Failure forensics"]
@@ -550,11 +602,17 @@ def _failure_forensics(trace: dict, rec: dict) -> str:
                      "acceptance criterion (e.g. a red suite or an unapproved review).")
     lines.append("\n**gates:**\n\n" + _fmt_gates(trace.get("gates") or []))
     lines.append("\n**reviews:**\n\n" + _fmt_reviews(trace.get("envelopes") or []))
-    vm = rec.get("vm_name") or "gone"
     state = rec.get("issue_state") or "failed"
-    lines.append(f"\n**surviving state:** VM `{vm}` (left alive on failure unless torn "
-                 f"down); run record state `{state}`; harvest bundle at "
-                 f"`.sandbox/runs/{rec.get('run_id')}.bundle` when harvest ran.")
+    if local:
+        payload = _local_path_quiet() or "<local_path>"
+        lines.append(f"\n**surviving state:** the payload clone at `{payload}` on branch "
+                     f"`sbx/{rec.get('run_id')}` survives (no VM); run record state "
+                     f"`{state}`.")
+    else:
+        vm = rec.get("vm_name") or "gone"
+        lines.append(f"\n**surviving state:** VM `{vm}` (left alive on failure unless torn "
+                     f"down); run record state `{state}`; harvest bundle at "
+                     f"`.sandbox/runs/{rec.get('run_id')}.bundle` when harvest ran.")
     return "\n".join(lines)
 
 
@@ -579,7 +637,8 @@ def _outcome_reason(outcome: str, note: str | None, trace: dict) -> str:
     return "all phases passed; session finished with status success"
 
 
-def _final_comment(outcome: str, note: str | None, rec: dict, trace: dict) -> str:
+def _final_comment(outcome: str, note: str | None, rec: dict, trace: dict,
+                   local: bool = False) -> str:
     session = trace.get("session") or {}
     phases = trace.get("phases") or []
     commits = trace.get("commits") or []
@@ -587,15 +646,16 @@ def _final_comment(outcome: str, note: str | None, rec: dict, trace: dict) -> st
     if outcome == "cancelled":
         parts.append(f"**State at teardown:** {note or 'cancelled at teardown'}")
     if outcome == "failed":
-        parts.append(_failure_forensics(trace, rec))
-    parts.append("### Provenance\n\n" + _provenance_rows(rec, session.get("adw_name")))
+        parts.append(_failure_forensics(trace, rec, local=local))
+    parts.append("### Provenance\n\n" + _provenance_rows(rec, session.get("adw_name"), local=local))
     parts.append("### Phase timeline\n\n" + _fmt_phase_list(phases))
     parts.append("### Review verdicts\n\n" + _fmt_reviews(trace.get("envelopes") or []))
     parts.append("### Commits (BASE..HEAD)\n\n" + _fmt_commits(commits))
     parts.append("### Cost\n\n" + _fmt_cost(session))
     parts.append("### Outcome reason (verbatim)\n\n```text\n"
                  + _outcome_reason(outcome, note, trace) + "\n```")
-    parts.append("### Harvest status\n\n" + _harvest_status(rec.get("run_id"), rec, commits))
+    parts.append("### Harvest status\n\n" + _harvest_status(rec.get("run_id"), rec, commits,
+                                                             local=local))
     parts.append("### Trace source\n\n`" + str(trace.get("source") or "none") + "`")
     if rec.get("prev_issue_number"):
         parts.append(f"### Follow-up\n\nFollow-up to #{rec.get('prev_issue_number')}")
@@ -614,8 +674,9 @@ def cmd_open(args: argparse.Namespace) -> int:
     rec = get_record(args.run_id)
     if rec is None:
         return 1
+    local = _is_local(rec, getattr(args, "local", False))
     try:
-        repo, _ = _app_config()
+        repo, _, _ = _app_config()
     except RuntimeError as e:
         die(str(e))
     if not repo:
@@ -641,9 +702,11 @@ def cmd_open(args: argparse.Namespace) -> int:
     title = " ".join(instruction.split()) or f"SSSF session {args.run_id}"
     if len(title) > 200:
         title = title[:199].rstrip() + "…"
-    body = redact(_open_body(rec, instruction, args.chain, prev))
+    body = redact(_open_body(rec, instruction, args.chain, prev, local=local))
     argv = ["issue", "create", "--repo", repo, "--title", title, "--body", body,
             "--label", "sssf:running"]
+    if local:
+        argv += ["--label", "sssf:local"]
     if prev:
         argv += ["--label", "sssf:follow-up"]
     r = gh(argv)
@@ -705,9 +768,11 @@ def _sync_state_from_labels(rec: dict, info: dict) -> str:
 
 
 def close_issue(run_id: str, outcome: str, note: str | None = None,
-                db: str | None = None, rec: dict | None = None) -> bool:
+                db: str | None = None, rec: dict | None = None,
+                local: bool = False) -> bool:
     """Append the final comment, flip labels, close the issue. Idempotent."""
     rec = rec if rec is not None else get_record(run_id)
+    local = _is_local(rec, local)
     repo = _repo_from_record(rec)
     num = (rec or {}).get("issue_number")
     if not repo or not num:
@@ -724,7 +789,7 @@ def close_issue(run_id: str, outcome: str, note: str | None = None,
         return True
 
     trace = _trace(run_id, db=db, record=rec)
-    body = redact(_final_comment(outcome, note, rec, trace))
+    body = redact(_final_comment(outcome, note, rec, trace, local=local))
     r = gh(["issue", "comment", str(num), "--repo", repo, "--body", body])
     if r.returncode != 0:
         warn(f"final comment failed: {r.stderr.strip()[:200]}")
@@ -745,7 +810,8 @@ def cmd_close(args: argparse.Namespace) -> int:
     if _issues_disabled():
         print("issues: disabled (SSSF_ISSUES=0) — not closing anything")
         return 0
-    close_issue(args.run_id, args.outcome, note=args.note, db=args.db)
+    close_issue(args.run_id, args.outcome, note=args.note, db=args.db,
+                local=getattr(args, "local", False))
     return 0
 
 
@@ -797,10 +863,12 @@ def cmd_watch(args: argparse.Namespace) -> int:
             milestone_done = True
         status = str(session.get("status") or "").lower()
         if status == "success":
-            close_issue(args.run_id, "accepted", rec=rec)
+            close_issue(args.run_id, "accepted", rec=rec,
+                        local=getattr(args, "local", False))
             return 0
         if status in ("fail", "failed", "error"):
-            close_issue(args.run_id, "failed", rec=rec)
+            close_issue(args.run_id, "failed", rec=rec,
+                        local=getattr(args, "local", False))
             return 0
         time.sleep(WATCH_INTERVAL)
     warn(f"watch {args.run_id}: timed out after {WATCH_MAX_SECONDS}s")
@@ -865,6 +933,8 @@ def build_parser() -> argparse.ArgumentParser:
     o.add_argument("run_id")
     o.add_argument("--instruction", required=True)
     o.add_argument("--chain", default=None)
+    o.add_argument("--local", action="store_true",
+                   help="LOCAL mode: label sssf:local, omit VM fields")
     o.set_defaults(func=cmd_open)
 
     u = sub.add_parser("update", help="append a milestone comment")
@@ -879,11 +949,15 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["accepted", "failed", "cancelled"])
     c.add_argument("--db", default=None)
     c.add_argument("--note", default=None)
+    c.add_argument("--local", action="store_true",
+                   help="LOCAL mode: read the host trace db, no VM fields")
     c.set_defaults(func=cmd_close)
 
     w = sub.add_parser("watch", help="host-side watcher: milestone + close")
     w.add_argument("run_id")
     w.add_argument("--since", required=True)
+    w.add_argument("--local", action="store_true",
+                   help="LOCAL mode: read the host trace db, no VM fields")
     w.set_defaults(func=cmd_watch)
 
     s = sub.add_parser("sync", help="reconcile issues left open by a dead watcher")

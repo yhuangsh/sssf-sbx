@@ -129,6 +129,13 @@ What it produces, so the next command is a plain `just sbx mount`:
 this one command** — it is the only `sbx` command that needs it, and it fails
 with named guidance if `gh` is absent or not logged in.
 
+**`just local scaffold` is the same scaffolder with the local preset** — identical prompts, one extra
+question: it additionally clones the new (or adopted) repo to a host `local_path` (default
+`~/projects/<name>`, which must live **outside** the kernel tree) and writes that path into the
+roster's `app:` block as `local_path:`. The finish banner then prints the local lane's next steps
+(`just local doctor` → `just local mount <run-id>`). `just sbx scaffold` keeps the default sandbox
+preset and behaves exactly as before — see [Local development — just local](#local-development--just-local).
+
 ## Arming for any language
 
 Your app's only obligation is a `sssf.app.yaml` manifest at the app root. The
@@ -245,6 +252,12 @@ is why they take an explicit `CONFIG` argument rather than reading
 | `just sbx lifecycle observe` | no | reads the shipped copy remotely |
 | `just sbx run agent` / `just sbx run cmd` | no | record-driven; the sandbox pi reads what `fill` shipped |
 | `just sbx manage list` | no | reads run records only |
+| `just local mount` | yes | preflight parses the roster's `app:` block (incl. `app.local_path`) |
+| `just local execute` | yes | the chain's `--config` comes from it; the issue tracker reads `app.repo` |
+| `just local doctor` | yes | roster provider-key preflight + payload resolution |
+| `just local ui` | no | reads the local trace db only |
+| `just local orch cc\|pi <roster>` | yes (as an argument) | the roster is the mandatory argument, validated and exported for the session |
+| `just local scaffold` | no | writes a roster; reads no `SSSF_CONFIG` |
 
 ## Use
 
@@ -382,3 +395,71 @@ teardown.
   the same orchestrator context.
 - **cc** — `claude --dangerously-skip-permissions --continue` from this repo
   root continues the most recent orchestrator conversation.
+
+## Local development — `just local`
+
+Same workflow, different machine. The `local` lane runs the **full sssf flow** —
+the same rosters, the same ADW chains, the same gates and reviews, the same
+GitHub-issue tracking, the same trace — but the payload is a **clone on your own
+machine** and every step runs **on the host**. No VM, no `ssh`, no exe.dev, no
+detachment: you watch the chain run in your terminal.
+
+```sh
+# create a GitHub app repo + a host clone + a local roster (interactive)
+just local scaffold
+
+# point SSSF_CONFIG at the roster it printed (add it to .env, or inline)
+SSSF_CONFIG=sssf.<name>.config.yaml   # .env is simplest
+
+# preflight: host tools, provider keys, and the payload
+just local doctor
+
+# clone-if-missing, run branch sbx/<run-id>, run record; prints the payload path
+just local mount my-run
+
+# the full SDLC, FOREGROUND — watch it live; commits land on sbx/<run-id>
+just local execute my-run sdlc "add X"
+just local execute my-run simple-sdlc "add X"   # pick another chain from `just adw`
+
+# the trace visualizer, against the local adws/adw_data/sssf.db
+just local ui
+
+# or boot an orchestrator that drives mount/execute/ui for you
+just local orch cc adws/adw_sssf_config/sssf.<app>.config.yaml
+just local orch pi adws/adw_sssf_config/sssf.<app>.config.yaml
+```
+
+The only roster difference is one key — the local payload:
+
+```yaml
+app:
+  repo: https://github.com/<owner>/<name>.git
+  ref: main
+  manifest: sssf.app.yaml
+  local_path: /Users/you/projects/<name>   # LOCAL mode payload (this lane)
+```
+
+### The tradeoffs — read this before choosing the lane
+
+The point of a sandbox is a **disposable, isolated** machine. Local mode gives
+that up, honestly, in exchange for speed and cost:
+
+- **No disposable isolation.** The payload is your **real working clone**. The run
+  branch `sbx/<run-id>` is the boundary — commits land there directly and you
+  push when ready. There is nothing to tear down; `git switch main` in the clone
+  is the cleanup, and a mistake is a mistake in your own checkout.
+- **No VM gates.** The sandbox's `create` / `fill` / `setup` / `observe` phases
+  do not exist here — there is no box to provision, health-check, or expose. You
+  inherit your host toolchain as-is.
+- **Instant + $0.** No VM boot, no exe.dev account, no per-run VM cost. The chain
+  starts as fast as the agents do.
+- **Commits land directly.** Nothing is harvested or bundled: work is on
+  `sbx/<run-id>` in the clone, ready to review and push.
+- **Issues are labeled `sssf:local`** (and carry no VM fields), so the audit
+  record still tells you where the session ran.
+
+The **one hard rule**: `app.local_path` must point **outside** this kernel tree —
+the kernel is never the payload of an app run. A `local_path` that resolves
+inside the kernel fails with a named error (in `payload_root`, and in `just local
+mount`) rather than running an app against the factory's own source.
+

@@ -27,6 +27,10 @@ mod adw 'just/adws.just'
 # sandbox orchestration: mount, execute, observe, tear down VMs
 mod sbx 'just/sandbox/mod.just'
 
+# local development: the full sssf workflow on the host, payload in a local clone.
+# NOT the factory repo's local.just — this kernel's `local` is the local dev lane.
+mod local 'just/local.just'
+
 # read the trace db: sessions, phases, tail, procs
 mod obs 'just/obs.just'
 
