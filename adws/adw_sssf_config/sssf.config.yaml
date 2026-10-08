@@ -50,6 +50,10 @@ app:
   # an external app repo into ~/app/target instead. See README.md → Arming.
   path: apps/your-app
   manifest: sssf.app.yaml
+  # local_path: ~/projects/<app>   # LOCAL mode: an existing clone of app.repo on
+                                   # the host. Set AND a git repo -> payload_root
+                                   # resolves here (host runs, `just local`); it
+                                   # must live OUTSIDE this kernel tree.
 
 agents:
   - name: planner

@@ -23,20 +23,39 @@ def _git(*args: str, repo: Path | str | None = None) -> str:
 
 
 def payload_root(app_cfg, factory_root: Path) -> Path:
-    """The repo ADW products commit to: the target clone when the roster's app
-    block names a repo AND the clone is checked out (phase 2 target mode, in
-    a VM), else the factory repo itself (vendored payload — byte-identical to
-    the old behavior).
+    """The repo ADW products commit to, resolved in three modes:
 
-    Host-side runs of a target-mode roster have no clone at <factory>/<path>
-    (FILL creates it only inside the VM); their products belong to the factory,
-    so a missing or non-git target falls back to the factory root instead of
+    - LOCAL: `app.local_path` is set and resolves to an existing git repo on
+      the host → return that clone (the `just local` lane). `local_path` WINS
+      over `repo`/`path`. The clone must live OUTSIDE the kernel tree — a
+      `local_path` inside `factory_root` is a named error (the kernel is never
+      the payload of an app run).
+    - TARGET: no local clone, but `app.repo` is set AND `<factory_root>/<path>`
+      is an existing git repo → return it (phase 2 target mode, in a VM).
+    - VENDORED: neither → return `factory_root` itself.
+
+    Fall-through rule: a `local_path` that is set but missing or not yet a git
+    repo is NOT an error here — cloning is the mount's job, not the resolver's
+    — so resolution falls through to TARGET/VENDORED. Host-side runs of a
+    target-mode roster likewise have no clone at `<factory>/<path>` (FILL
+    creates it only inside the VM); their products belong to the factory, so a
+    missing or non-git target falls back to the factory root instead of
     crashing the first git call with FileNotFoundError."""
+    factory = Path(factory_root).resolve()
+    if app_cfg is not None and getattr(app_cfg, "local_path", None):
+        local = Path(app_cfg.local_path).expanduser().resolve()
+        if local.is_relative_to(factory):
+            raise RuntimeError(
+                f"payload_root: app.local_path '{local}' is inside the kernel tree "
+                f"'{factory}' — the kernel is never the payload of an app run; "
+                f"point local_path at a clone OUTSIDE the kernel")
+        if local.is_dir() and is_repo(local):
+            return local
     if app_cfg is not None and getattr(app_cfg, "repo", None):
         target = (Path(factory_root) / app_cfg.path).resolve()
         if target.is_dir() and is_repo(target):
             return target
-    return Path(factory_root).resolve()
+    return factory
 
 
 def current_branch(repo: Path | str | None = None) -> str:

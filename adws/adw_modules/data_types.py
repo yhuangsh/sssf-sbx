@@ -346,16 +346,27 @@ class ObservabilityConfig(BaseModel):
 class AppConfig(BaseModel):
     """The per-app target: where its code lives and where its manifest lives.
 
-    Phase 0 compat: with no `repo`, the payload is vendored inside the factory
-    clone at `path` (today's layout: apps/inkwell). Phase 2 adds a separate
-    target clone via `repo`/`ref`; this block is the one place the app's location
-    is declared, so every reader resolves it here rather than hardcoding a path.
+    Three payload modes, resolved by `git_helper.payload_root()`:
+
+    - LOCAL (`local_path`): an existing clone of `app.repo` on the host; the
+      payload lives there, outside this kernel tree (the `just local` lane).
+      `local_path` WINS over `repo`/`path` when set and the dir is a git repo.
+    - TARGET (`repo`): the payload is a separate clone of `repo` at
+      `<factory_root>/<path>` (usually inside a VM).
+    - VENDORED (no `repo`): the payload is vendored inside the factory clone at
+      `path` (Phase 0 compat, today's layout: apps/inkwell).
+
+    `local_path` must point OUTSIDE the kernel tree — the kernel is never the
+    payload of an app run; `payload_root()` raises a named error otherwise.
+    This block is the one place the app's location is declared, so every reader
+    resolves it here rather than hardcoding a path.
     """
 
     repo: Optional[str] = None          # None = payload vendored in the factory clone
     ref: Optional[str] = None           # branch/tag/sha for repo; default remote HEAD
     path: str = "apps/inkwell"          # mount point inside the factory clone
     manifest: str = "sssf.app.yaml"     # relative to <path>
+    local_path: Optional[str] = None    # LOCAL mode: existing clone of app.repo on the host; wins over repo/path
 
 
 class SSSFConfig(BaseModel):

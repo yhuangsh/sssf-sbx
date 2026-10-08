@@ -44,6 +44,11 @@ BUN = os.environ.get("BUN_PATH", "").strip() or "bun"
 DEFAULT_APP_PATH = "apps/inkwell"
 DEFAULT_APP_MANIFEST = "sssf.app.yaml"
 
+# The test check's name is a convention, not a schema: scaffolded manifests
+# declare `test` (map form), the reference inkwell app declared `tests` (list
+# form). Both run as the SDLC's deterministic test phase.
+TEST_CHECK_NAMES = ("test", "tests")
+
 
 def _check_dir(run, name: str) -> Path:
     seq = run.phases[-1].seq if run.phases else 0
@@ -59,8 +64,22 @@ def _check_dir(run, name: str) -> Path:
 
 
 def _app_dir(run) -> Path:
-    """Where the app under test lives: the roster's `app.path` under repo root."""
+    """Where the app under test lives: the LOCAL clone when the roster sets
+    `app.local_path`, else the roster's `app.path` under repo root.
+
+    LOCAL mode ships the payload outside the kernel, so a bare `repo_root /
+    path` would point at a nonexistent dir, `_load_checks` would find no
+    manifest, and the quality phase would silently run ZERO checks. Resolving
+    through `payload_root()` keeps manifest checks pinned to the real clone.
+    When `local_path` is set but not yet cloned, `payload_root` falls through
+    to the factory root; the `!= repo_root` guard keeps target and vendored
+    modes byte-identical (the local_path-absent path never calls payload_root)."""
     app = getattr(run.cfg, "app", None)
+    if app is not None and getattr(app, "local_path", None):
+        from .git_helper import payload_root
+        root = payload_root(app, run.repo_root)
+        if root != Path(run.repo_root).resolve():
+            return root
     path = getattr(app, "path", None) or DEFAULT_APP_PATH
     return run.repo_root / path
 
@@ -222,13 +241,19 @@ def run_inkwell_quality(run) -> QualityResult:
     Behavior-identical to the old hardcoded list: for inkwell's manifest this is
     exactly frontend/backend lint, typecheck, and build.
     """
-    return _run_checks(run, [c for c in _load_checks(run) if c.name != "tests"])
+    return _run_checks(run, [c for c in _load_checks(run) if c.name not in TEST_CHECK_NAMES])
 
 
 def run_inkwell_tests(run) -> QualityResult:
-    """The manifest's `tests` block as a single-check QualityResult, so it reports
-    like every other block. Kept for the callers that run tests as their own phase."""
-    return _run_checks(run, [c for c in _load_checks(run) if c.name == "tests"])
+    """The manifest's test block as a single-check QualityResult, so it reports
+    like every other block. Kept for the callers that run tests as their own phase.
+
+    The block's NAME is a convention, not a schema: the scaffolded manifests
+    (README, sandbox_mount/host/scaffold.py) declare it `test` in the map form,
+    while the reference inkwell app declared it `tests` in the list form. Both
+    must run — otherwise the SDLC's deterministic test phase is a green-looking
+    no-op (0 checks) for every scaffolded app."""
+    return _run_checks(run, [c for c in _load_checks(run) if c.name in TEST_CHECK_NAMES])
 
 
 def as_envelope(result: QualityResult, what: str) -> VerifyOutput:

@@ -64,6 +64,11 @@ app:
                             # factory code edits" true) or normalize quality.py in a
                             # separately authorized run. Verified in session 83c5881a;
                             # see its context_handoff/blocked_report.md.
+  # local_path: ~/projects/<app>   # LOCAL mode: an existing clone of app.repo on
+                                   # the host. Set AND a git repo -> payload_root
+                                   # resolves here (host runs, `just local`); it
+                                   # must live OUTSIDE this kernel tree.
+                                   # Absent (as here) -> sandbox TARGET mode.
 
 agents:
   - name: planner
