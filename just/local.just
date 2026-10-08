@@ -126,6 +126,16 @@ mount RUN_ID:
         exit 1
     fi
 
+    # ── trace db: an armed project has its db from the start. Same helper the
+    # ui recipe uses (via local_ui.py) — one implementation, two callers.
+    # Idempotent: an existing db is opened, schema-verified, and left alone.
+    APP_DB=$(awk '
+      /^observability:[[:space:]]*$/ { o=1; next }
+      /^[^[:space:]]/                { o=0 }
+      o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    uv run sandbox_mount/host/ensure_trace_db.py "${APP_DB:-adws/adw_data/sssf.db}"
+
     # ── run branch sbx/<run-id> (create or switch) ────────────────────────────
     BRANCH="sbx/{{RUN_ID}}"
     if git -C "$LOCAL_PATH" show-ref --verify --quiet "refs/heads/$BRANCH"; then
@@ -221,7 +231,6 @@ ui:
         exit "$rc"
     }
     eval "$OUT"
-    echo "→ visualizer: http://localhost:$UI_PORT  (api :$API_PORT, db: $DB)"
     cd .claude/skills/sssf/apps/visualizer
     bun install
     (SSSF_DB="$DB" PORT="$API_PORT" bun run server/index.ts &)

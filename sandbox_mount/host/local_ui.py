@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import shlex
 import socket
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -42,6 +43,7 @@ import yaml
 
 # sandbox_mount/host/local_ui.py -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[2]
+ENSURE_DB = REPO_ROOT / "sandbox_mount" / "host" / "ensure_trace_db.py"
 PORT_BASE = 4620
 HEALTH_TIMEOUT = 1.5
 
@@ -120,6 +122,22 @@ def first_free_pair(start: int) -> int:
     sys.exit(1)
 
 
+def ensure_db(db: Path) -> None:
+    """Create the project's trace db (correct Tracer schema) if it is missing.
+
+    An empty project is a valid state, but the visualizer exits when sssf.db is
+    absent — so the first `ui` after mounting must materialize it. The shared
+    helper mirrors provision.sh's trace-db step; it is idempotent, but we skip
+    the subprocess entirely on the common path so an existing db is untouched.
+    """
+    if db.is_file():
+        return
+    result = subprocess.run(["uv", "run", str(ENSURE_DB), str(db)])
+    if result.returncode != 0:
+        print(f"[local ui] trace db init failed (exit {result.returncode})", file=sys.stderr)
+        sys.exit(1)
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 1:
         print("usage: uv run sandbox_mount/host/local_ui.py <roster-path>", file=sys.stderr)
@@ -129,6 +147,7 @@ def main(argv: list[str]) -> int:
         roster = (Path.cwd() / roster).resolve()
     key = project_key(roster)
     db = resolve_db(roster)
+    ensure_db(db)
     port_file = db.parent / "ui.port"
     print(f"→ project: {key}", file=sys.stderr)
     print(f"→ db:      {db}", file=sys.stderr)
