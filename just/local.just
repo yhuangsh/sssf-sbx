@@ -16,7 +16,7 @@
 #     manifest: sssf.app.yaml
 #
 # `git_helper.payload_root()` resolves local_path first, so the chains commit
-# to that clone's run branch `sbx/<run-id>`. The kernel is NEVER the payload of
+# to that clone's run branch `local/<run-id>`. The kernel is NEVER the payload of
 # an app run — a local_path inside this repo is a named error.
 #
 # A module inherits NOTHING from its parent — not variables, not settings, and
@@ -42,7 +42,7 @@ scaffold REPO='':
     fi
 
 # host-side arming + payload prep: resolve local_path, clone-if-missing, clean
-# check, create the run branch sbx/<run-id>, write the run record (vm_name=local)
+# check, create the run branch local/<run-id>, write the run record (vm_name=local)
 mount RUN_ID:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -136,8 +136,8 @@ mount RUN_ID:
     ' "$ROSTER")
     uv run sandbox_mount/host/ensure_trace_db.py "${APP_DB:-adws/adw_data/sssf.db}"
 
-    # ── run branch sbx/<run-id> (create or switch) ────────────────────────────
-    BRANCH="sbx/{{RUN_ID}}"
+    # ── run branch local/<run-id> (create or switch) ──────────────────────────
+    BRANCH="local/{{RUN_ID}}"
     if git -C "$LOCAL_PATH" show-ref --verify --quiet "refs/heads/$BRANCH"; then
         git -C "$LOCAL_PATH" switch "$BRANCH"
     else
@@ -185,7 +185,7 @@ execute RUN_ID CHAIN PROMPT:
         /*) ;;
         *)  LOCAL_PATH="$(pwd -P)/$LOCAL_PATH" ;;
     esac
-    BRANCH="sbx/{{RUN_ID}}"
+    BRANCH="local/{{RUN_ID}}"
     CUR=$(git -C "$LOCAL_PATH" branch --show-current 2>/dev/null || true)
     if [ "$CUR" != "$BRANCH" ]; then
         echo "[local execute] payload $LOCAL_PATH is on '${CUR:-<none>}', not '$BRANCH' — run 'just local mount {{RUN_ID}}' first" >&2

@@ -414,10 +414,10 @@ SSSF_CONFIG=sssf.<name>.config.yaml   # .env is simplest
 # preflight: host tools, provider keys, and the payload
 just local doctor
 
-# clone-if-missing, run branch sbx/<run-id>, run record; prints the payload path
+# clone-if-missing, run branch local/<run-id>, run record; prints the payload path
 just local mount my-run
 
-# the full SDLC, FOREGROUND — watch it live; commits land on sbx/<run-id>
+# the full SDLC, FOREGROUND — watch it live; commits land on local/<run-id>
 just local execute my-run sdlc "add X"
 just local execute my-run simple-sdlc "add X"   # pick another chain from `just adw`
 
@@ -500,7 +500,7 @@ The point of a sandbox is a **disposable, isolated** machine. Local mode gives
 that up, honestly, in exchange for speed and cost:
 
 - **No disposable isolation.** The payload is your **real working clone**. The run
-  branch `sbx/<run-id>` is the boundary — commits land there directly and you
+  branch `local/<run-id>` is the boundary — commits land there directly and you
   push when ready. There is nothing to tear down; `git switch main` in the clone
   is the cleanup, and a mistake is a mistake in your own checkout.
 - **No VM gates.** The sandbox's `create` / `fill` / `setup` / `observe` phases
@@ -509,7 +509,7 @@ that up, honestly, in exchange for speed and cost:
 - **Instant + $0.** No VM boot, no exe.dev account, no per-run VM cost. The chain
   starts as fast as the agents do.
 - **Commits land directly.** Nothing is harvested or bundled: work is on
-  `sbx/<run-id>` in the clone, ready to review and push.
+  `local/<run-id>` in the clone, ready to review and push.
 - **Issues are labeled `sssf:local`** (and carry no VM fields), so the audit
   record still tells you where the session ran.
 
