@@ -24,10 +24,22 @@ def _size(path: Path) -> str:
     return f"{n}B" if n < 1024 else f"{n / 1024:.1f}KB"
 
 
+def _resolve(run, raw: str) -> Path:
+    """Resolve an envelope path against the AGENT'S working root, not this
+    process's cwd. In LOCAL mode agents work in the payload clone while the
+    chain runs in the kernel, so a bare `specs/<id>_*.md` must be looked up in
+    the clone. Vendored/target modes have repo_root == cwd, so this is identical.
+    """
+    p = Path(raw)
+    if p.is_absolute():
+        return p
+    return Path(getattr(run, "repo_root", Path.cwd())) / p
+
+
 def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
-        p = Path(a)
+        p = _resolve(run, a)
         report.check(a, p.exists(),
                      f"exists, {_size(p)}" if p.exists() else "declared artifact does not exist")
     return report
@@ -36,7 +48,7 @@ def artifacts_exist(envelope: EnvelopeBase, run) -> GateReport:
 def files_non_empty(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
-        p = Path(a)
+        p = _resolve(run, a)
         if not (p.exists() and p.is_file()):
             continue                       # existence is artifacts_exist's job
         empty = p.stat().st_size == 0
@@ -47,7 +59,7 @@ def files_non_empty(envelope: EnvelopeBase, run) -> GateReport:
 def json_parses(envelope: EnvelopeBase, run) -> GateReport:
     report = GateReport()
     for a in envelope.artifacts:
-        p = Path(a)
+        p = _resolve(run, a)
         if p.suffix != ".json" or not p.exists():
             continue
         try:
@@ -62,7 +74,7 @@ def diff_matches_claims(envelope: EnvelopeBase, run) -> GateReport:
     """Every file claimed changed must exist on disk."""
     report = GateReport()
     for f in getattr(envelope, "changed_files", []):
-        p = Path(f)
+        p = _resolve(run, f)
         report.check(f, p.exists(),
                      f"exists, {_size(p)}" if p.exists() else "claimed changed file does not exist")
     return report

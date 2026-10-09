@@ -72,7 +72,7 @@ Order is the design: **record → VM → tag-confirm → ssh-wait → session_id
 
 ```
 run id:  my-run-20260804-e08747
-record:  .sandbox/runs/my-run-20260804-e08747.json
+record:  <state root>/runs/my-run-20260804-e08747.json
 tag:     hello-server
 vm:      creating my-run-20260804-e08747 (tag hello-server) ...
 tag:     hello-server confirmed on my-run-20260804-e08747 (tags: hello-server)
@@ -188,8 +188,10 @@ manifest with **no `serve:` block** is a library/CLI app — the app lane is ski
 
 ## What each phase writes to the run record
 
-The record (`.sandbox/runs/<run-id>.json`, gitignored) is the **only** state shared across phases —
-each phase is a separate process. Its schema is closed: `run_record.py` rejects unknown keys, so a typo
+The record (`<state root>/runs/<run-id>.json`, gitignored) is the **only** state shared across phases —
+each phase is a separate process. The state root is `<local_path>/sssf/` for local/app runs,
+`~/.sssf/apps/<app-key>/` for sandbox-only target mode, and legacy `.sandbox/runs/` for vendored
+(kernel-self) runs; `run_record.py runs-dir` prints the effective one. Its schema is closed: `run_record.py` rejects unknown keys, so a typo
 in a `set` fails loudly instead of silently losing data. The fields are
 `run_id`, `vm_name`, `tag`, `https_url`, `session_id`, `commit_sha`, `factory_sha`, `ports`, `pid`,
 `created_at`, `closed_at`.

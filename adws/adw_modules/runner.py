@@ -13,7 +13,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import agents, git_helper
+from . import agents, git_helper, state_root
 from .console import Console
 from .data_types import AgentCall, EnvelopeBase, EventRecord, Phase, PhaseParams
 from .utils import ensure_dir, now_iso
@@ -50,8 +50,19 @@ class Run:
         self.tokens = 0
         self.cost = 0.0
         self._seq = tracer.max_phase_seq(adw_id)   # a joined run continues the sequence
-        self.repo_root = git_helper.repo_root()    # where every agent is spawned to work
-        self.session_dir = ensure_dir(Path(cfg.defaults.data_dir) / "sessions" / adw_id)
+        self.factory_root = git_helper.repo_root()  # the kernel/factory clone
+        # Agents work IN the payload clone whenever it is separate from the
+        # factory: LOCAL mode (an outside-the-kernel clone) and TARGET mode (the
+        # app clone at <factory>/<path>). Otherwise their code/spec/doc edits land
+        # in the factory and never ride the payload's run branch. Vendored mode
+        # (payload == factory) is unchanged. `factory_root` stays the factory, so
+        # chains keep resolving payload_root against it and can route any stray
+        # factory-side product into the payload.
+        self.repo_root = git_helper.payload_root(getattr(cfg, "app", None), self.factory_root)
+        # App runs re-home the session dir under the per-app state root; vendored
+        # runs keep the configured data_dir (adws/adw_data). Same rule as the db.
+        self.session_dir = ensure_dir(
+            state_root.effective_data_dir(cfg.app, cfg.defaults.data_dir) / "sessions" / adw_id)
         self.context_handoff_dir = ensure_dir(self.session_dir / "context_handoff")
         self._agent_map_path = self.session_dir / "agent_map.json"
         self.agent_map: dict = (json.loads(self._agent_map_path.read_text())

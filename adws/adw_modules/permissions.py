@@ -135,6 +135,11 @@ def always_writable(cfg: SSSFConfig) -> list[str]:
     is normally ignored, so it never even appears in a snapshot — but an agent's
     ability to record its work must not hang on a gitignore entry that someone
     can delete or that a changed `data_dir` can outgrow.
+
+    App runs re-home the runtime to <local_path>/sssf (adw_modules/state_root.py),
+    which is OUTSIDE the repo: the git snapshot only sees the repo tree, so an
+    outside data dir simply never appears in the diff and needs no grant here.
+    This list stays the configured/vendored entry; no behavior break either way.
     """
     return [cfg.defaults.data_dir.rstrip("/") + "/"]
 

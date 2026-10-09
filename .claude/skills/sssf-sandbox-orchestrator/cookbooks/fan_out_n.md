@@ -164,7 +164,7 @@ Where each column comes from:
 
 | Column | Source |
 |---|---|
-| run id, vm, tag, closed | `.sandbox/runs/<id>.json` via `run_record.py list` |
+| run id, vm, tag, closed | the state root's `runs/<id>.json` via `run_record.py list` (merges new + legacy) |
 | commit | run record `commit_sha` (the input), plus the run's own commits in the harvest bundle (the output) |
 | model (per agent) | trace db `agent_sessions.model` |
 | tokens, cost, status, request | trace db `sessions.total_tokens`, `total_cost`, `status`, `request` |

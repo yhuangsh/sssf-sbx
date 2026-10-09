@@ -41,6 +41,32 @@ mount RUN_ID TAG='':
         fi
     fi
 
+    # ── state-root arming (best-effort): when the roster names an app.local_path
+    # clone, gitignore sssf/ so host-side run state never dirties it. Non-fatal
+    # here — harvest re-checks the clone is clean before merging.
+    APP_LOCAL=$(awk '
+      /^app:[[:space:]]*$/      { a=1; next }
+      /^[^[:space:]]/           { a=0 }
+      a && /^[[:space:]]+local_path:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    if [ -n "$APP_LOCAL" ]; then
+        APP_LOCAL="${APP_LOCAL/#\~/$HOME}"
+        if git -C "$APP_LOCAL" rev-parse --git-dir >/dev/null 2>&1; then
+            GI="$APP_LOCAL/.gitignore"
+            if ! { [ -f "$GI" ] && grep -qx 'sssf/' "$GI"; }; then
+                printf '\n# sssf runtime state (state-root re-homing)\nsssf/\n' >> "$GI"
+                OTHER="$(git -C "$APP_LOCAL" status --porcelain | grep -v '^.. \.gitignore$' || true)"
+                if [ -z "$OTHER" ]; then
+                    git -C "$APP_LOCAL" add .gitignore \
+                        && git -C "$APP_LOCAL" commit -q -m "Arm sssf state root (gitignore sssf/)" \
+                        && echo "→ armed: $APP_LOCAL/.gitignore now gitignores sssf/"
+                else
+                    echo "[mount] WARN: $APP_LOCAL has other changes — commit the sssf/ line in .gitignore before harvest" >&2
+                fi
+            fi
+        fi
+    fi
+
     just sbx lifecycle create "{{RUN_ID}}" "{{TAG}}"
     ID=$(sandbox_mount/host/run_record.py list | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["run_id"])')
     just sbx lifecycle fill    "$ID"

@@ -5,16 +5,28 @@ Each phase (create, fill, setup, execute, observe, teardown) is a separate
 process, so nothing survives between them except what is on disk. Teardown has
 no other way to learn which VM to destroy and which commits to harvest: lose the
 record and the run cannot be cleaned up. One JSON file per run, keyed by run_id,
-under .sandbox/runs/ (gitignored).
+under the per-app STATE ROOT (gitignored per app):
+
+    local mode / target mode WITH app.local_path -> <local_path>/sssf/runs/
+    target mode WITHOUT local_path               -> ~/.sssf/apps/<app-key>/runs/
+    vendored mode (kernel-self, no app.repo)      -> .sandbox/runs/ (unchanged)
+
+Legacy `.sandbox/runs/` records stay READABLE (reads search the new location
+first, then legacy), so pre-change runs keep resolving until `migrate` moves
+them. Kernel-self development is deliberately unchanged: those artifacts belong
+to the kernel project.
 
 Usage:
-    run_record.py create  <run-id>
-    run_record.py get     <run-id> [field]
-    run_record.py set     <run-id> key=value [key=value ...]
-    run_record.py close   <run-id>
+    run_record.py create    <run-id>
+    run_record.py get       <run-id> [field]
+    run_record.py set       <run-id> key=value [key=value ...]
+    run_record.py close     <run-id>
     run_record.py list
-    run_record.py path    <run-id>
-    run_record.py new-id  <task>
+    run_record.py path      <run-id>
+    run_record.py new-id    <task>
+    run_record.py state-root        # resolved state root (empty line in vendored mode)
+    run_record.py runs-dir          # effective runs directory
+    run_record.py migrate           # move legacy .sandbox/runs items into the state root
 
 `get <run-id> <field>` prints the bare value so shell can capture it:
     RUN_VM=$(sandbox_mount/host/run_record.py get my-run vm_name)
@@ -29,13 +41,17 @@ import json
 import os
 import re
 import secrets
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 # sandbox_mount/host/run_record.py -> repo root
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUNS_DIR = REPO_ROOT / ".sandbox" / "runs"
+# Legacy/kernel location. Still the vendored-mode home and the transition source.
+LEGACY_RUNS_DIR = REPO_ROOT / ".sandbox" / "runs"
+# Sandbox-only target mode (app.repo, no app.local_path): a per-app root in $HOME.
+HOME_STATE_ROOT = Path.home() / ".sssf" / "apps"
 
 # The closed schema. Every field is referenced by name somewhere in the six
 # phases, so a typo in a `set` is a silent data loss bug -- reject unknown keys
@@ -88,9 +104,114 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def app_key(repo_url: str) -> str:
+    """Sanitized basename of an app repo URL, e.g.
+    https://github.com/yhuangsh/hello-server.git -> hello-server.
+
+    basename minus `.git`, lowercased, every run of non [a-z0-9] collapsed to a
+    single `-`. Empty/odd input still yields a usable key.
+    """
+    base = (repo_url or "").rstrip("/").rsplit("/", 1)[-1]
+    if base.endswith(".git"):
+        base = base[:-4]
+    key = re.sub(r"[^a-z0-9]+", "-", base.lower()).strip("-")
+    return key or "app"
+
+
+def _roster_app(roster_path: Path | str | None) -> tuple[str | None, str | None]:
+    """(app.repo, app.local_path) from the roster's `app:` block.
+
+    A line scan, NOT yaml: this module stays stdlib-only and runs before any
+    toolchain exists. Same two-space convention the just recipes parse with awk:
+    the block starts at a column-0 `app:` and ends at the next column-0 key;
+    blank lines and `#` comments are ignored, so a COMMENTED-OUT `local_path:`
+    does not count. Comment tails after a value are dropped (only the value
+    token is read).
+    """
+    repo = local_path = None
+    if not roster_path:
+        return None, None
+    try:
+        text = Path(roster_path).read_text()
+    except OSError:
+        return None, None
+    in_app = False
+    for raw in text.splitlines():
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        if raw[0] not in (" ", "\t"):
+            in_app = raw.split("#", 1)[0].strip() == "app:"
+            continue
+        if not in_app:
+            continue
+        m = re.match(r"[ \t]+(repo|local_path):[ \t]*(\S+)", raw)
+        if not m:
+            continue
+        key, value = m.group(1), m.group(2)
+        if key == "repo" and repo is None:
+            repo = value
+        elif key == "local_path" and local_path is None:
+            local_path = value
+    return repo, local_path
+
+
+def resolve_state_root(roster_path: Path | str | None) -> Path | None:
+    """The per-run state root for a roster path, or None = vendored/kernel mode.
+
+    (a) app.local_path set  -> <local_path>/sssf
+    (b) app.repo set        -> ~/.sssf/apps/<app-key>
+    (c) neither             -> None (kernel's .sandbox/runs + adws/adw_data)
+    `~` in local_path expands. cwd-independent: the path is used as written.
+    """
+    repo, local_path = _roster_app(roster_path)
+    if local_path:
+        clone = Path(os.path.expanduser(local_path))
+        if not clone.is_absolute():
+            # Same convention as `just local mount`: a relative local_path is
+            # relative to the kernel root, so resolution is cwd-independent.
+            clone = REPO_ROOT / clone
+        return clone / "sssf"
+    if repo:
+        return HOME_STATE_ROOT / app_key(repo)
+    return None
+
+
+def state_root() -> Path | None:
+    """The active roster's ($SSSF_CONFIG) state root, or None.
+
+    None when SSSF_CONFIG is unset/unparseable or resolves to vendored mode —
+    callers then fall back to legacy `.sandbox/runs/`, so `run_record.py list`
+    in `doctor` keeps working without a roster.
+    """
+    return resolve_state_root(os.environ.get("SSSF_CONFIG"))
+
+
+def runs_dir() -> Path:
+    """The effective runs directory: <state_root>/runs, or legacy when vendored."""
+    root = state_root()
+    return (root / "runs") if root else LEGACY_RUNS_DIR
+
+
+def resolve_record_path(run_id: str) -> Path:
+    """Where a record is READ.
+
+    New location first, then legacy (transition compatibility), else the new
+    location so a FileNotFoundError names the canonical place. A record that
+    exists ONLY in legacy is therefore read and updated IN PLACE pre-migration.
+    """
+    new = runs_dir() / f"{run_id}.json"
+    if new.exists():
+        return new
+    legacy = LEGACY_RUNS_DIR / f"{run_id}.json"
+    if legacy.exists():
+        return legacy
+    return new
+
+
 def path(run_id: str) -> Path:
-    """Where this run's record lives. Does not create anything."""
-    return RUNS_DIR / f"{run_id}.json"
+    """Where this run's record lives (canonical, used by the `path` CLI).
+    Does not create anything."""
+    return runs_dir() / f"{run_id}.json"
 
 
 def new_run_id(task: str) -> str:
@@ -117,8 +238,9 @@ def create(run_id: str) -> dict:
     # `harvest --no-merge`. FILL refines this to bundle-only in vendored mode.
     record["merge_mode"] = "merge"
 
-    RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    target = path(run_id)
+    target_dir = runs_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target = target_dir / f"{run_id}.json"
     # O_EXCL, not `if target.exists()`: overwriting a live record orphans that
     # run's teardown handle, and the check-then-write window is exactly when a
     # retrying phase would land.
@@ -134,7 +256,7 @@ def create(run_id: str) -> dict:
 
 def get(run_id: str, field: str | None = None):
     """The whole record, or one field."""
-    target = path(run_id)
+    target = resolve_record_path(run_id)
     try:
         record = json.loads(target.read_text())
     except FileNotFoundError:
@@ -183,24 +305,33 @@ def close(run_id: str) -> dict:
     return record
 
 
-def list_runs() -> list[dict]:
-    """Every record, newest first."""
-    if not RUNS_DIR.is_dir():
-        return []
-    records = []
-    for f in RUNS_DIR.glob("*.json"):
+def _read_records(directory: Path) -> dict[str, dict]:
+    """Every record in `directory`, keyed by run_id. Loud on a malformed one."""
+    out: dict[str, dict] = {}
+    if not directory.is_dir():
+        return out
+    for f in sorted(directory.glob("*.json")):
         try:
-            records.append(json.loads(f.read_text()))
+            rec = json.loads(f.read_text())
         except (OSError, ValueError) as e:
             # Loud, not skipped. A record quietly dropped for being malformed
             # hides a run's VM from teardown.
             raise ValueError(f"unreadable run record {f}: {e}") from None
-    records.sort(key=lambda r: (r.get("created_at") or "", r.get("run_id") or ""), reverse=True)
-    return records
+        out[rec.get("run_id") or f.stem] = rec
+    return out
+
+
+def list_runs() -> list[dict]:
+    """Every record, newest first. New location wins over a legacy twin."""
+    records = _read_records(LEGACY_RUNS_DIR)
+    records.update(_read_records(runs_dir()))   # new location wins on dedupe
+    rows = list(records.values())
+    rows.sort(key=lambda r: (r.get("created_at") or "", r.get("run_id") or ""), reverse=True)
+    return rows
 
 
 def _write(run_id: str, record: dict) -> None:
-    target = path(run_id)
+    target = resolve_record_path(run_id)
     tmp = target.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(record, indent=2) + "\n")
     os.replace(tmp, target)  # atomic: a crash mid-write leaves the old record, not half of one
@@ -217,6 +348,92 @@ def _coerce(key: str, raw: str):
     if kind == "json":
         return json.loads(raw)
     return raw
+
+
+_MIGRATE_SUFFIXES = ("-artifacts", ".bundle", ".watcher.log")
+
+
+def _safe_move(src: Path, dst: Path) -> None:
+    """Move src to dst, NON-DESTRUCTIVELY: a partial destination is cleaned up
+    and the source left untouched if anything fails (shutil.move only unlinks
+    the source after a successful copy, so a half-copy never costs the source)."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        raise FileExistsError(f"destination exists: {dst}")
+    tmp = dst.with_name(dst.name + ".migrating")
+    try:
+        shutil.move(str(src), str(tmp))
+        os.replace(tmp, dst)
+    except Exception:
+        if tmp.is_dir():
+            shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            tmp.unlink(missing_ok=True)
+        raise
+
+
+def _move_record(src: Path, dst: Path) -> None:
+    """Move a record JSON with write -> verify -> remove, so a failed move can
+    never lose a record."""
+    data = src.read_bytes()
+    parsed = json.loads(data)          # raises before anything is written
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(dst.name + ".migrating")
+    tmp.write_bytes(data)
+    back = json.loads(tmp.read_bytes())  # read-back verification
+    if back != parsed:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"verification mismatch for {dst}")
+    os.replace(tmp, dst)
+    src.unlink()                        # only now is the source removed
+
+
+def migrate() -> int:
+    """Move every legacy .sandbox/runs item into the resolved state root.
+
+    Idempotent (destination wins) and NON-DESTRUCTIVE on failure: a failed item
+    leaves its source in place, the error is printed, and the run exits 1 after
+    processing the rest. Refuses vendored/unresolved mode — there is no re-home
+    target, and moving the kernel's own records into the kernel would be a no-op.
+    """
+    root = state_root()
+    if root is None:
+        print("run_record: migrate refuses vendored/unresolved mode — set SSSF_CONFIG "
+              "to an app roster (app.repo or app.local_path)", file=sys.stderr)
+        return 1
+    dest = root / "runs"
+    if not LEGACY_RUNS_DIR.is_dir():
+        print("migrate: no legacy .sandbox/runs/ directory — nothing to migrate")
+        return 0
+    ids = sorted({p.stem for p in LEGACY_RUNS_DIR.glob("*.json")})
+    moved = failures = 0
+    for run_id in ids:
+        items = [LEGACY_RUNS_DIR / f"{run_id}.json"]
+        items += [LEGACY_RUNS_DIR / f"{run_id}{suffix}" for suffix in _MIGRATE_SUFFIXES]
+        for src in items:
+            if not src.exists():
+                continue
+            target = dest / src.name
+            if target.exists():
+                print(f"migrate: skip {src.name} (already at destination)")
+                continue
+            try:
+                if src.name.endswith(".json"):
+                    _move_record(src, target)
+                else:
+                    _safe_move(src, target)
+            except Exception as e:
+                failures += 1
+                print(f"migrate: FAILED {src} -> {target}: {e}", file=sys.stderr)
+                continue
+            moved += 1
+            print(f"migrate: {src} -> {target}")
+    if failures:
+        print(f"migrate: {moved} item(s) moved, {failures} FAILURE(s) — sources left intact",
+              file=sys.stderr)
+        return 1
+    print(f"migrate: {moved} item(s) moved into {dest}")
+    return 0
 
 
 def _print(value) -> None:
@@ -247,6 +464,17 @@ def main(argv: list[str]) -> int:
             return 2
         print(new_run_id(args[0]))
         return 0
+
+    if cmd == "state-root":
+        _print(state_root())              # empty line for vendored/unresolved mode
+        return 0
+
+    if cmd == "runs-dir":
+        print(runs_dir())
+        return 0
+
+    if cmd == "migrate":
+        return migrate()
 
     if not args:
         print(f"usage: run_record.py {cmd} <run-id>", file=sys.stderr)

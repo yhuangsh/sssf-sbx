@@ -68,8 +68,10 @@ app — that is your handle. If you ever need to see it again, `echo "$SSSF_CONF
    A `FAIL` means report and stop, never work around it.
 
 2. **Mount** — `mount` resolves `app.local_path` (error if it points inside the kernel), clones the
-   app from `app.repo` when the clone is missing, verifies the manifest and a clean tree, creates the
-   run branch `sbx/<run-id>` in the clone, and writes the run record (`vm_name: local`):
+   app from `app.repo` when the clone is missing, verifies the manifest and a clean tree, arms the
+   clone (`sssf/` added to its `.gitignore`, committed on the run branch), creates the run branch
+   `local/<run-id>` in the clone, and writes the run record (`vm_name: local`) into the state root
+   (`<local_path>/sssf/runs/`):
    ```bash
    just local mount <run-id>
    ```
@@ -79,32 +81,33 @@ app — that is your handle. If you ever need to see it again, `echo "$SSSF_CONF
 ## Develop via the execute lane
 
 - **`just local execute <run-id> sdlc "<prompt>"`** — the factory: the full SDLC with gates, reviews,
-  and commits to the run branch `sbx/<run-id>` in the clone. **Foreground**: it runs in your terminal
+  and commits to the run branch `local/<run-id>` in the clone. **Foreground**: it runs in your terminal
   and you watch it live. There is no detachment and no watcher. The default chain is `sdlc`; pass any
   recipe name from `just adw` as the second argument (`simple-sdlc`, `plan-build-test-quality`, …).
 - **Never run `just adw …` on its own** (hard rule 2) — work enters through `just local execute`, so
   the issue hooks, the run branch, and the trace all stay in the loop.
-- Commits land **directly** on `sbx/<run-id>` in the clone. You push when ready; nothing is harvested
+- Commits land **directly** on `local/<run-id>` in the clone, including the run's `specs/` and
+  `app_docs/` products (payload-aware commit routing). You push when ready; nothing is harvested
   or bundled.
 
 See [execute_work.md](execute_work.md) for picking a chain and the delegation contract.
 
 ## Watch the trace
 
-- **`just local ui`** serves the shipped visualizer against **this project's** trace db — the active
-  roster's `observability.db` (a namespaced local roster keeps it at
-  `adws/adw_data/local/<key>/sssf.db`) — and prints which db it serves. It records a stable
+- **`just local ui`** serves the shipped visualizer against **this project's** trace db — the state
+  root's `sssf.db` (`<local_path>/sssf/sssf.db`) — and prints which db it serves. It records a stable
   per-project UI port in `<db dir>/ui.port` (allocated from 4620 upward; the API runs on port+1); a
-  re-run against a live instance prints the URL and exits 0. `just obs …` reads the same roster db.
+  re-run against a live instance prints the URL and exits 0. `just obs …` reads the same db.
 
 ## Issues, and the boundary
 
 - GitHub issues open/close exactly like the sandbox lane — the instruction verbatim before the chain,
   the outcome after — but labeled **`sssf:local`** and with no VM fields. `just local execute` does
   this for you; `just sbx manage sync-issues` reconciles anything left open.
-- There is **no teardown**. The run branch `sbx/<run-id>` in the clone is the boundary: **`git switch
+- There is **no teardown**. The run branch `local/<run-id>` in the clone is the boundary: **`git switch
   main`** in the payload (or just leaving the branch) is the cleanup. The kernel tree is never the
-  payload and is never committed to by an app run.
+  payload and is never committed to by an app run; all run state (records, db, sessions, artifacts)
+  lives under `<local_path>/sssf/`.
 
 See `README.md → "Local development — just local"` for the tradeoffs vs the sandbox lane.
 

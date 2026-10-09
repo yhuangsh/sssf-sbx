@@ -86,7 +86,8 @@ of a scavenger hunt.
        (`harvest: local clone at $LOCAL has uncommitted changes — clean it or use --no-merge`,
        exit 1). Nothing has been touched in the clone yet.
     4. Fetch the run branch into the clone at `refs/harvest/$RUN_ID` from the bare cache
-       `.sandbox/repos/<app>.git`.
+       `<state root>/repos/<app>.git` (state-root re-homing; `<local_path>/sssf/repos/` for an
+       app run, legacy `.sandbox/repos/` for vendored).
     5. Checkout `base_ref` (from the run record; default `main` if empty). If `base_ref` does
        not exist in the clone → named abort with manual instructions.
     6. `git -C "$LOCAL" merge --no-edit "refs/harvest/$RUN_ID"` (fast-forward or true merge).
@@ -127,12 +128,12 @@ of a scavenger hunt.
     <base>)`, `merge-broke-build (reverted; merge sha <sha>)`, or
     `bundle-only (awaiting integration decision)`. An unharvested run prints `not harvested`.
   - `commits (<base>..<ref>):` — `git log --format=%h %s <base>..<ref>` from the harvested app
-    cache (`.sandbox/repos/<basename(app.repo)>.git`, ref `refs/sandbox/<id>`); falls back to
-    `refs/harvest/<id>` or `sbx/<id>` in the local clone when the cache is missing.
+    cache (`<state root or .sandbox>/repos/<basename(app.repo)>.git`, ref `refs/sandbox/<id>`);
+    falls back to `refs/harvest/<id>` or `local/<id>` in the local clone when the cache is missing.
   - `diffstat:` — `git diff --stat <base>..<ref>` from the same source.
   - `tokens/cost:` — reads the pulled artifact db at
-    `.sandbox/runs/<id>-artifacts/<roster observability.db>` (default
-    `adws/adw_data/sssf.db`) via stdlib `sqlite3`:
+    `<state root>/runs/<id>-artifacts/<roster observability.db>` (legacy
+    `.sandbox/runs/…`, default db `adws/adw_data/sssf.db`) via stdlib `sqlite3`:
     `select total_tokens, total_cost, status from sessions order by started_at desc limit 1`.
     Missing db → `n/a (no artifact db)`. **Never ssh** to VMs — compare is host-side only.
 
@@ -202,8 +203,8 @@ The full live-verification plan is in `specs/fd43ce2c_harvest-merge-modes.md →
   conflicting files + both sides + manual commands are printed, `harvest_state=harvested-unmerged`,
   issue comment added. (Teardown's pre-existing harvest-failure guard prevents the VM from being
   destroyed.)
-- **(c) BUNDLE-ONLY** — `harvest <id> --no-merge` on a fresh run: bundle at `.sandbox/runs/`,
-  ref `refs/sandbox/<id>` in `.sandbox/repos/<app>.git`; local clone untouched
+- **(c) BUNDLE-ONLY** — `harvest <id> --no-merge` on a fresh run: bundle at `<state root>/runs/`,
+  ref `refs/sandbox/<id>` in `<state root or .sandbox>/repos/<app>.git`; local clone untouched
   (`git -C <local> status` and `git log` prove it).
 - **(d) MERGE-BROKE-BUILD** — sandbox A changes the home page text to X, sandbox B updates the
   test to assert text Y (≠ X). A merges green; B merges textually clean but post-merge `bun

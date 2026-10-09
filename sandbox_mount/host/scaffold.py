@@ -96,6 +96,10 @@ dist/
 .venv/
 __pycache__/
 .env
+
+# sssf runtime state (state-root re-homing): runs/, the trace db, sessions,
+# artifacts and bundles all live beside the project under sssf/
+sssf/
 """
 
 # ── skeletons ────────────────────────────────────────────────────────────────
@@ -606,29 +610,23 @@ def write_roster(owner: str, name: str, ref: str, visibility: str,
     block.append("")
     body = template[:app_idx] + block + template[agents_idx:]
 
-    # The hello template now namespaces its runtime state under local/hello;
-    # every scaffolded roster must own its OWN namespace or all scaffolded apps
-    # interleave into one db. Derive the key from the FINAL roster filename (the
-    # rename path above can change <name>), and rewrite ONLY the value token of
-    # the data_dir/db lines, line-wise: a YAML round-trip would drop the
-    # template's comments (mount.just and manage/mod.just parse this with awk).
-    key = roster.name
-    if key.startswith("sssf."):
-        key = key[len("sssf."):]
-    if key.endswith(".config.yaml"):
-        key = key[: -len(".config.yaml")]
-    key = key or "kernel"
-
+    # The hello template namespaces its runtime state under local/hello; a
+    # scaffolded app run now re-homes its state under the app's own state root
+    # (<local_path>/sssf or ~/.sssf/apps/<app-key>) via run_record/state_root, so
+    # the generated roster gets PLAIN kernel DEFAULTS rather than a per-key
+    # namespace. Rewrite ONLY the value token line-wise: a YAML round-trip would
+    # drop the template's comments (mount.just and manage/mod.just parse this with
+    # awk).
     patched: list[str] = []
     seen_data_dir = seen_db = False
     for line in body:
         if not seen_data_dir and re.match(r"^\s*data_dir:\s*\S", line):
             line = re.sub(r"^(\s*data_dir:\s*)\S+",
-                          rf"\g<1>adws/adw_data/local/{key}", line, count=1)
+                          r"\g<1>adws/adw_data", line, count=1)
             seen_data_dir = True
         elif not seen_db and re.match(r"^\s*db:\s*\S", line):
             line = re.sub(r"^(\s*db:\s*)\S+",
-                          rf"\g<1>adws/adw_data/local/{key}/sssf.db", line, count=1)
+                          r"\g<1>adws/adw_data/sssf.db", line, count=1)
             seen_db = True
         patched.append(line)
     body = patched
@@ -657,8 +655,8 @@ def write_roster(owner: str, name: str, ref: str, visibility: str,
 
     defaults = data.get("defaults") or {}
     observability = data.get("observability") or {}
-    want_data_dir = f"adws/adw_data/local/{key}"
-    want_db = f"adws/adw_data/local/{key}/sssf.db"
+    want_data_dir = "adws/adw_data"
+    want_db = "adws/adw_data/sssf.db"
     if defaults.get("data_dir") != want_data_dir:
         raise ScaffoldError(
             f"generated roster defaults.data_dir is {defaults.get('data_dir')!r}, expected {want_data_dir!r}"
@@ -670,7 +668,8 @@ def write_roster(owner: str, name: str, ref: str, visibility: str,
 
     roster.write_text(text)
     print(f"[scaffold] wrote roster: {roster.name} (in the current directory, left untracked — NOT committed)")
-    print(f"[scaffold]    trace dir: {want_data_dir}/ (isolated per project)")
+    print("[scaffold]    state root: resolves per run (<local_path>/sssf or "
+          "~/.sssf/apps/<app-key>) — no per-project namespace in the roster")
     return roster
 
 
@@ -881,7 +880,8 @@ def main(argv: list[str]) -> int:
         print("      with your team) is your choice — scaffold never touches the kernel's git history.")
         print("lanes: 'just local execute <run-id> sdlc \"<prompt>\"' runs the chain on your machine;")
         print("       'just local ui' serves the trace. There is no VM and no teardown — the run")
-        print("       branch sbx/<run-id> in the clone is the boundary; push when ready.")
+        print("       branch local/<run-id> in the clone is the boundary; push when ready.")
+        print("       all run state lives under <local_path>/sssf/ — the kernel accumulates nothing.")
     else:
         print("  2. preflight:     just sbx manage doctor")
         print("  3. mount:         just sbx mount <run-id>")

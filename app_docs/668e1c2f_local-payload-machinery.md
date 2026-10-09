@@ -102,16 +102,18 @@ with this commit:
 just local scaffold                         # interactive: creates repo, clones to host, writes roster
 SSSF_CONFIG=sssf.<name>.config.yaml         # in .env or inline
 just local doctor                            # preflight + payload resolution
-just local mount <run-id>                    # clone-if-missing, run branch sbx/<id>, run record (vm_name=local)
-just local execute <run-id> sdlc "<prompt>" # full SDLC, FOREGROUND; commits land on sbx/<id>
-just local ui                                # trace visualizer against adws/adw_data/sssf.db
+just local mount <run-id>                    # clone-if-missing, arm+run branch local/<id>, record in <local_path>/sssf/
+just local execute <run-id> sdlc "<prompt>" # full SDLC, FOREGROUND; commits land on local/<id>
+just local ui                                # trace visualizer against <local_path>/sssf/sssf.db
 just local orch cc|pi adws/adw_sssf_config/sssf.<app>.config.yaml   # orchestrator
 ```
 
 Issues open/close exactly like the sandbox lane but are labeled **`sssf:local`**
 and carry no VM fields. There is no teardown — `git switch main` in the clone
-is the cleanup. Commits land directly on `sbx/<run-id>` in the clone; push
-when ready, nothing is harvested or bundled.
+is the cleanup. Commits (code, `specs/`, `app_docs/`) land directly on
+`local/<run-id>` in the clone via payload-aware commit routing; push when ready,
+nothing is harvested or bundled. All run state lives under `<local_path>/sssf/`
+(records, db, sessions, artifacts) — the kernel tree accumulates nothing.
 
 ### The kernel-inside rule
 
@@ -142,12 +144,13 @@ acceptance criteria are in `specs/668e1c2f_local-payload-machinery.md` §6):
    GitHub repo created, host clone present, roster contains `local_path:`,
    finish banner prints the `just local mount` next step.
 2. **Mount** — `SSSF_CONFIG=$PWD/sssf.<name>.config.yaml just local mount <id>`
-   green; clone on `sbx/<id>`; run record shows `vm_name=local` and a
-   `commit_sha`.
+   green; clone on `local/<id>`; run record shows `vm_name=local` and a
+   `commit_sha` (and lives under `<local_path>/sssf/runs/` after state-root
+   re-homing).
 3. **Execute** — `just local execute <id> sdlc "<small change>"` green
    end-to-end; the **quality phase actually runs the manifest's checks
    against the local clone** (this is the `_app_dir()` fix — a "no checks"
-   note is a FAILURE here); `git log main..sbx/<id>` non-empty; issue closed
+   note is a FAILURE here); `git log main..local/<id>` non-empty; issue closed
    accepted with `sssf:local`.
 4. **Orch resume** — `just local orch pi <roster>` derives the session id
    `local-<name>` deterministically (strip `sssf.`/`.config.yaml`,

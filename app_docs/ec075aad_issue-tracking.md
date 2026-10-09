@@ -9,9 +9,10 @@ failure warns and never fails mount/execute/teardown, and `SSSF_ISSUES=0` disabl
 
 ## Why it matters
 
-Until now the audit record of an ADW session lived in two places — `.sandbox/runs/<run-id>.json`
-(the run record) and `.sandbox/runs/<run-id>-artifacts/...` (the teardown-pulled trace copy). Both
-die with the host: a wiped `.sandbox/` loses the trail of what every session actually did and why.
+Until now the audit record of an ADW session lived in two places — the run record
+(`<state root>/runs/<run-id>.json`; legacy `.sandbox/runs/<run-id>.json`) and the teardown-pulled
+trace copy (`<state root>/runs/<run-id>-artifacts/...`). Both die with the host: a wiped state root
+loses the trail of what every session actually did and why.
 With this change the same trail lives in the roster's `app.repo`, under five `sssf:*` labels
 (`running` / `accepted` / `failed` / `cancelled` / `follow-up`), with comments carrying the
 instruction, provenance, phase timeline, review verdicts, target run-branch commits `BASE..HEAD`,
@@ -48,7 +49,7 @@ tracker's only VM contact is a read-only `ssh … python3` + stdlib `sqlite3` qu
     if the run record's `issue_state` is already one of the closed values, or if it has been
     replaced by a follow-up.
   - `sync` — the backstop. Iterates every run record; for runs whose issue is still open,
-    reads the trace (live VM, else `.sandbox/runs/<run_id>-artifacts/adws/adw_data/sssf.db`,
+    reads the trace (live VM, else the pulled artifact db under the state root's runs/,
     else warns and skips) and closes the issue with the real outcome.
 
   Issue bodies pass through `redact()` before they leave the host, replacing every host env var
@@ -80,7 +81,7 @@ tracker's only VM contact is a read-only `ssh … python3` + stdlib `sqlite3` qu
     `uv run issue_tracker.py open RUN_ID --instruction "$PROMPT" --chain "$ADW"`. The
     `|| echo "!! issue open failed …"` keeps the tracker best-effort.
   - *After* `pid` is recorded: spawn the watcher with the same three detachment pieces the SDLC
-    uses — `nohup`, `> .sandbox/runs/<RUN_ID>.watcher.log 2>&1`, `< /dev/null` — but locally,
+    uses — `nohup`, `> <state root>/runs/<RUN_ID>.watcher.log 2>&1`, `< /dev/null` — but locally,
     because the watcher needs `gh`. `teardown` and `just sbx manage sync-issues` are the
     backstops if it dies.
 
@@ -172,7 +173,7 @@ gh issue view <N> --repo <app.repo> --comments            # the full audit trail
 Watch the watcher in flight:
 
 ```bash
-tail -f .sandbox/runs/<run-id>.watcher.log
+tail -f "$(sandbox_mount/host/run_record.py runs-dir)/<run-id>.watcher.log"
 ```
 
 Force reconciliation at any time:

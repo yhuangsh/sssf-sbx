@@ -121,9 +121,31 @@ mount RUN_ID:
     # ── app serve-port awareness (advisory — never blocks the mount) ──────────
     uv run sandbox_mount/host/serve_ports.py || true
 
-    if [ -n "$(git -C "$LOCAL_PATH" status --porcelain)" ]; then
-        echo "[local mount] working tree at $LOCAL_PATH is dirty — the run branch must start clean; commit or stash first" >&2
-        exit 1
+    # ── state-root arming: gitignore sssf/ so per-app run state (records, db,
+    # sessions, artifacts) never dirties the clone. Idempotent — a second mount
+    # is a no-op. Done BEFORE the clean-tree check; the appended line is the ONE
+    # allowed dirty change, committed on the run branch below.
+    ARMED=0
+    GI="$LOCAL_PATH/.gitignore"
+    if ! { [ -f "$GI" ] && grep -qx 'sssf/' "$GI"; }; then
+        printf '\n# sssf runtime state (state-root re-homing)\nsssf/\n' >> "$GI"
+        ARMED=1
+    fi
+
+    DIRTY="$(git -C "$LOCAL_PATH" status --porcelain)"
+    if [ -n "$DIRTY" ]; then
+        if [ "$ARMED" = 1 ]; then
+            # The only acceptable dirty path is the .gitignore we just appended.
+            OTHER="$(printf '%s\n' "$DIRTY" | grep -v '^.. \.gitignore$' || true)"
+            if [ -n "$OTHER" ]; then
+                echo "[local mount] working tree at $LOCAL_PATH is dirty — commit or stash first:" >&2
+                printf '%s\n' "$OTHER" >&2
+                exit 1
+            fi
+        else
+            echo "[local mount] working tree at $LOCAL_PATH is dirty — the run branch must start clean; commit or stash first" >&2
+            exit 1
+        fi
     fi
 
     # ── trace db: an armed project has its db from the start. Same helper the
@@ -142,6 +164,13 @@ mount RUN_ID:
         git -C "$LOCAL_PATH" switch "$BRANCH"
     else
         git -C "$LOCAL_PATH" switch -c "$BRANCH"
+    fi
+
+    # Commit the arming line onto the run branch (carried across the switch).
+    if [ "$ARMED" = 1 ]; then
+        git -C "$LOCAL_PATH" add .gitignore
+        git -C "$LOCAL_PATH" commit -q -m "Arm sssf state root (gitignore sssf/)"
+        echo "→ armed: $LOCAL_PATH/.gitignore now gitignores sssf/"
     fi
 
     # ── run record: vm_name=local (tolerated free string), commit + factory sha ─

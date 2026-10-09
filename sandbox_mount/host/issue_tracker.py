@@ -46,12 +46,33 @@ from typing import NoReturn
 
 HOST_DIR = Path(__file__).resolve().parent
 REPO_ROOT = HOST_DIR.parents[1]
-RUNS_DIR = REPO_ROOT / ".sandbox" / "runs"
 
 # run_record.py lives next to us and is the sanctioned store. Import it directly
-# (both run on the host) so coercion + the closed schema stay in one place.
+# (both run on the host) so coercion + the closed schema stay in one place. It
+# also owns the ONE state-root rule, so this file never hardcodes .sandbox/runs.
 sys.path.insert(0, str(HOST_DIR))
 import run_record  # noqa: E402
+
+
+def _runs_dir() -> Path:
+    """The run's record/artifact/bundle dir: the per-app state root's runs/ (or
+    legacy .sandbox/runs/ in vendored mode). Resolved fresh — SSSF_CONFIG is read
+    per call, exactly like run_record itself."""
+    return run_record.runs_dir()
+
+
+def _state_root_or_legacy_sandbox() -> Path:
+    """Where host-side per-app state (harvest caches) lives: <root>/ or .sandbox/."""
+    root = run_record.state_root()
+    return root if root is not None else run_record.LEGACY_RUNS_DIR.parent
+
+
+def _display(path: Path) -> str:
+    """Path relative to the kernel repo when it is inside it, else absolute."""
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
 
 # The trace db inside the factory clone on the VM (provision.sh step 7), relative
 # to the factory root. This is the fallback; _roster_db_rel() reads the active
@@ -375,7 +396,7 @@ def _vm_trace(vm: str, since: str | None, adw: str | None,
 
 
 def _artifact_db(run_id: str) -> Path:
-    return RUNS_DIR / f"{run_id}-artifacts" / _roster_db_rel()
+    return _runs_dir() / f"{run_id}-artifacts" / _roster_db_rel()
 
 
 def _trace(run_id: str, db: str | None = None, since: str | None = None,
@@ -391,7 +412,8 @@ def _trace(run_id: str, db: str | None = None, since: str | None = None,
     data: dict | None = None
     source = "none"
     if _is_local(rec):
-        host_db = REPO_ROOT / _roster_db_rel()
+        root = run_record.state_root()
+        host_db = (root / "sssf.db") if root is not None else (REPO_ROOT / _roster_db_rel())
         if host_db.is_file():
             data, source = _read_db(str(host_db), since, adw), str(host_db)
     elif db and Path(db).is_file():
@@ -439,7 +461,8 @@ def _commits(run_id: str, rec: dict | None) -> list[str]:
                 return lines
         except Exception:
             pass
-    # Harvested cache: .sandbox/repos/<app>.git with refs/sandbox/<run_id>.
+    # Harvested cache: <state root or .sandbox>/repos/<app>.git with
+    # refs/sandbox/<run_id>.
     repo = _repo_from_url(rec.get("issue_url")) or ""
     if not repo:
         try:
@@ -448,7 +471,7 @@ def _commits(run_id: str, rec: dict | None) -> list[str]:
             repo = ""
     if repo:
         base_name = repo.rstrip("/").rsplit("/", 1)[-1]
-        cache = RUNS_DIR.parent / "repos" / f"{base_name}.git"
+        cache = _state_root_or_legacy_sandbox() / "repos" / f"{base_name}.git"
         if cache.is_dir():
             r = subprocess.run(["git", "-C", str(cache), "log", "--format=%h %s",
                                 f"{base}..refs/sandbox/{run_id}"],
@@ -462,7 +485,7 @@ def _harvest_status(run_id: str, rec: dict | None, commits: list[str],
                     local: bool = False) -> str:
     if local:
         payload = _local_path_quiet() or "<local_path>"
-        return (f"local mode — commits are on branch `sbx/{run_id}` in `{payload}`; "
+        return (f"local mode — commits are on branch `local/{run_id}` in `{payload}`; "
                 "push when ready (no bundle)")
     # The record's integration outcome wins when HARVEST has written one — it is
     # the durable truth (merged / harvested-unmerged / merge-broke-build /
@@ -482,9 +505,9 @@ def _harvest_status(run_id: str, rec: dict | None, commits: list[str],
                 "resolve the checks and re-apply the merge")
     if state == "bundle-only":
         return f"bundle-only — awaiting integration decision"
-    bundle = RUNS_DIR / f"{run_id}.bundle"
+    bundle = _runs_dir() / f"{run_id}.bundle"
     if not bundle.is_file():
-        return (f"not harvested — no bundle at `{bundle.relative_to(REPO_ROOT)}` "
+        return (f"not harvested — no bundle at `{_display(bundle)}` "
                 "(run `just sbx manage harvest " + run_id + "`)")
     count = len(commits)
     suffix = f", {count} commit(s) in BASE..HEAD" if count else ""
@@ -646,13 +669,14 @@ def _failure_forensics(trace: dict, rec: dict, local: bool = False) -> str:
     if local:
         payload = _local_path_quiet() or "<local_path>"
         lines.append(f"\n**surviving state:** the payload clone at `{payload}` on branch "
-                     f"`sbx/{rec.get('run_id')}` survives (no VM); run record state "
+                     f"`local/{rec.get('run_id')}` survives (no VM); run record state "
                      f"`{state}`.")
     else:
         vm = rec.get("vm_name") or "gone"
+        bundle = _runs_dir() / f"{rec.get('run_id')}.bundle"
         lines.append(f"\n**surviving state:** VM `{vm}` (left alive on failure unless torn "
                      f"down); run record state `{state}`; harvest bundle at "
-                     f"`.sandbox/runs/{rec.get('run_id')}.bundle` when harvest ran.")
+                     f"`{_display(bundle)}` when harvest ran.")
     return "\n".join(lines)
 
 

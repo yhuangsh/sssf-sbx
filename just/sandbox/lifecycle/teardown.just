@@ -28,7 +28,9 @@ teardown RUN_ID *FLAGS:
 
     RR="sandbox_mount/host/run_record.py"
     RUN_ID="{{ RUN_ID }}"
-    RUNS=".sandbox/runs"
+    # State-root-aware: <local_path>/sssf/runs for app runs, legacy .sandbox/runs
+    # for vendored/kernel-self. run_record owns the rule; recipes never hardcode.
+    RUNS="$("$RR" runs-dir)"
     ART="$RUNS/$RUN_ID-artifacts"
 
     # Through a variable, not straight into `for ... in`: interpolating an empty
@@ -80,10 +82,10 @@ teardown RUN_ID *FLAGS:
       a && /^[[:space:]]+manifest:[[:space:]]/ { print $2; exit }
     ' "$ROSTER")
     [ -n "$APP_MANIFEST" ] || APP_MANIFEST=sssf.app.yaml
-    # The trace db path is roster data (a namespaced local roster keeps its db
-    # under adws/adw_data/local/<key>/). The tar is relative to the factory root
-    # on the VM, so the artifact lands at .sandbox/runs/<id>-artifacts/<DB_REL>
-    # on the host — which _artifact_db() in issue_tracker.py mirrors.
+    # The trace db path is roster data. The tar is relative to the factory root
+    # on the VM (where the in-VM chain keeps kernel locations), so the artifact
+    # lands at <host runs dir>/<id>-artifacts/<DB_REL> — where <host runs dir> is
+    # the state root's runs/ — which _artifact_db() in issue_tracker.py mirrors.
     DB_REL=$(awk '
       /^observability:[[:space:]]*$/ { o=1; next }
       /^[^[:space:]]/                { o=0 }

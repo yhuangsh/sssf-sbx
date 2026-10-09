@@ -4,13 +4,20 @@ Every function takes an optional `repo`. `None` means the process cwd — the
 factory clone — which is exactly the old behavior, so vendored runs are
 unchanged. In phase-2 target mode the ADW products commit to the app's own
 clone at `<factory>/<app.path>`, so the four ADW scripts resolve it once with
-`payload_root()` and thread it through. The factory clone is then never
-committed to inside a sandbox; `specs/` and `app_docs/` products live
-factory-side, uncommitted, and ride home in the teardown tar.
+`payload_root()` and thread it through.
+
+Agents are spawned in the resolved payload (`runner.Run.repo_root`), so in LOCAL
+and TARGET modes their code, `specs/` and `app_docs/` products are written in the
+payload clone and the chain's commit phases land them there. `payload_root()`
+resolves that clone; `route_kernel_products()` is the safety net that moves any
+stray factory-side `specs/<adw_id>_*.md` / `app_docs/<adw_id>_*.md` into the
+payload before a commit, so the kernel tree is never committed to by an app run.
+In VENDORED mode the payload IS the kernel, so routing is a no-op.
 """
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -56,6 +63,37 @@ def payload_root(app_cfg, factory_root: Path) -> Path:
         if target.is_dir() and is_repo(target):
             return target
     return factory
+
+
+# Kernel-side products an app run relocates into the payload clone (local mode).
+KERNEL_PRODUCT_DIRS = ("specs", "app_docs")
+
+
+def route_kernel_products(adw_id: str, payload: Path, kernel_root: Path) -> list[Path]:
+    """Local mode: MOVE this run's kernel-side products into `payload`.
+
+    Globs `specs/<adw_id>_*.md` and `app_docs/<adw_id>_*.md` (only THIS run's id)
+    in `kernel_root`, moving each to the same relative path under `payload`
+    (parents created). Returns the moved files. No-op when `payload ==
+    kernel_root` (vendored mode) or when nothing matches. Call immediately before
+    a commit phase so the subsequent `commit_all(repo=payload)` lands the spec and
+    write-up on the clone's run branch instead of leaving them in the kernel.
+    """
+    payload = Path(payload).resolve()
+    kernel_root = Path(kernel_root).resolve()
+    if payload == kernel_root:
+        return []
+    moved: list[Path] = []
+    for folder in KERNEL_PRODUCT_DIRS:
+        src_dir = kernel_root / folder
+        if not src_dir.is_dir():
+            continue
+        for src in sorted(src_dir.glob(f"{adw_id}_*.md")):
+            dst = payload / folder / src.name
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(dst))
+            moved.append(dst)
+    return moved
 
 
 def current_branch(repo: Path | str | None = None) -> str:

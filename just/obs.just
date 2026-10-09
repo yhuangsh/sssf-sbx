@@ -49,6 +49,10 @@ sessions: _require-sssf-config
       o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
     ' "$SSSF_CONFIG")
     DB=${DB:-adws/adw_data/sssf.db}
+    # App runs re-home the trace db under the state root; when the roster asks for
+    # the plain kernel default, read it from there (<root>/sssf.db).
+    ROOT=$(sandbox_mount/host/run_record.py state-root 2>/dev/null || true)
+    if [ "$DB" = "adws/adw_data/sssf.db" ] && [ -n "$ROOT" ]; then DB="$ROOT/sssf.db"; fi
     sqlite3 "$DB" "select adw_id, status, substr(request,1,60), total_tokens, round(total_cost,4) from sessions order by started_at desc limit 10;"
 
 # phases for one adw: just obs phases <adw_id>
@@ -61,6 +65,8 @@ phases ADW_ID: _require-sssf-config
       o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
     ' "$SSSF_CONFIG")
     DB=${DB:-adws/adw_data/sssf.db}
+    ROOT=$(sandbox_mount/host/run_record.py state-root 2>/dev/null || true)
+    if [ "$DB" = "adws/adw_data/sssf.db" ] && [ -n "$ROOT" ]; then DB="$ROOT/sssf.db"; fi
     sqlite3 "$DB" "select seq, name, kind, owner, status, attempt from phases where adw_id='{{ADW_ID}}' order by seq;"
 
 # live event tail for one adw: just obs tail <adw_id>
@@ -73,6 +79,8 @@ tail ADW_ID: _require-sssf-config
       o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
     ' "$SSSF_CONFIG")
     DB=${DB:-adws/adw_data/sssf.db}
+    ROOT=$(sandbox_mount/host/run_record.py state-root 2>/dev/null || true)
+    if [ "$DB" = "adws/adw_data/sssf.db" ] && [ -n "$ROOT" ]; then DB="$ROOT/sssf.db"; fi
     sqlite3 "$DB" "select rowid, type, name, started_at from events where adw_id='{{ADW_ID}}' order by rowid desc limit 25;"
 
 # what a run is running right now: just obs procs <adw_id>
@@ -85,6 +93,8 @@ procs ADW_ID: _require-sssf-config
       o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
     ' "$SSSF_CONFIG")
     DB=${DB:-adws/adw_data/sssf.db}
+    ROOT=$(sandbox_mount/host/run_record.py state-root 2>/dev/null || true)
+    if [ "$DB" = "adws/adw_data/sssf.db" ] && [ -n "$ROOT" ]; then DB="$ROOT/sssf.db"; fi
     sqlite3 "$DB" "select kind, name, pid, command, started_at from processes where adw_id='{{ADW_ID}}' and ended_at is null order by id;"
 
 # Verifies each pid still looks like the thing we recorded; pids get recycled.
@@ -99,6 +109,8 @@ kill ADW_ID: _require-sssf-config
       o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
     ' "$SSSF_CONFIG")
     DB=${DB:-adws/adw_data/sssf.db}
+    ROOT=$(sandbox_mount/host/run_record.py state-root 2>/dev/null || true)
+    if [ "$DB" = "adws/adw_data/sssf.db" ] && [ -n "$ROOT" ]; then DB="$ROOT/sssf.db"; fi
     rows=$(sqlite3 "$DB" "select kind||' '||pid from processes where adw_id='{{ADW_ID}}' and ended_at is null order by case kind when 'agent' then 0 else 1 end, id desc;")
     [ -z "$rows" ] && { echo "no live processes recorded for {{ADW_ID}}"; exit 0; }
     while read -r kind pid; do
@@ -125,4 +137,6 @@ ui: _require-sssf-config
       o && /^[[:space:]]+db:[[:space:]]/ { print $2; exit }
     ' "$SSSF_CONFIG")
     DB=${DB:-adws/adw_data/sssf.db}
+    ROOT=$(sandbox_mount/host/run_record.py state-root 2>/dev/null || true)
+    if [ "$DB" = "adws/adw_data/sssf.db" ] && [ -n "$ROOT" ]; then DB="$ROOT/sssf.db"; fi
     cd .claude/skills/sssf/apps/visualizer && bun install && (SSSF_DB={{invocation_directory()}}/"$DB" bun run server/index.ts &) && bunx vite

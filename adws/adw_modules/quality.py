@@ -77,7 +77,7 @@ def _app_dir(run) -> Path:
     app = getattr(run.cfg, "app", None)
     if app is not None and getattr(app, "local_path", None):
         from .git_helper import payload_root
-        root = payload_root(app, run.repo_root)
+        root = payload_root(app, getattr(run, "factory_root", run.repo_root))
         if root != Path(run.repo_root).resolve():
             return root
     path = getattr(app, "path", None) or DEFAULT_APP_PATH

@@ -335,10 +335,15 @@ class ConfigDefaults(BaseModel):
     protected_files: list[str] = Field(default_factory=lambda: [
         "adws/adw_modules/", "adws/adw_sssf_config/", "adws/adw_*.py",
     ])
+    # Vendored/kernel-self default. App runs (app.local_path set) re-home the
+    # session runtime to <local_path>/sssf via adw_modules/state_root.py; this
+    # value is used only when that resolves to None.
     data_dir: str = "adws/adw_data"
 
 
 class ObservabilityConfig(BaseModel):
+    # Vendored/kernel-self default. App runs re-home the trace db to
+    # <local_path>/sssf/sssf.db via adw_modules/state_root.py.
     db: str = "adws/adw_data/sssf.db"
     poll_ms: int = 500
 

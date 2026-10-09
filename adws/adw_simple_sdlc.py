@@ -65,17 +65,23 @@ def main(prompt: str, config: str, adw_id: str | None = None) -> int:
     run = session.ensure(cfg, adw_id)
     # Target mode commits to the app's own clone; vendored mode to the factory
     # root. Everything below (baseline, commits, change capture) uses `payload`.
-    payload = git_helper.payload_root(cfg.app, run.repo_root)
+    payload = git_helper.payload_root(cfg.app, run.factory_root)
     baseline = git_helper.rev("HEAD", repo=payload)   # pinned before this run commits anything
 
     def commit(ph, envelope, allow_empty: bool = False) -> None:
         """Commit what the preceding phase produced, in that agent's own words.
 
-        `allow_empty` is for the phases whose product is factory-side in target
-        mode (the plan in `specs/`, the write-up in `app_docs/`): the payload repo
-        is legitimately clean and the product rides home in the teardown tar. A
-        build that changed nothing in the payload IS an anomaly — that stays strict.
+        LOCAL mode first relocates this run's kernel-side products
+        (`specs/<id>_*.md`, `app_docs/<id>_*.md`) into the payload clone, so the
+        spec and the write-up ride the payload branch with the code.
+
+        `allow_empty` is for the phases whose product is factory-side in TARGET
+        mode (the plan in `specs/`, the write-up in `app_docs/`): there the payload
+        repo is legitimately clean and the product rides home in the teardown tar.
+        A build that changed nothing in the payload IS an anomaly — that stays strict.
         """
+        if cfg.app.local_path:
+            git_helper.route_kernel_products(run.adw_id, payload, run.factory_root)
         message = envelope.commit_message or f"sssf({run.adw_id}): {envelope.summary}"
         sha = git_helper.commit_all(message, repo=payload, allow_empty=allow_empty)
         if sha:

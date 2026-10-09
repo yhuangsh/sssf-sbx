@@ -1,10 +1,12 @@
 # just/sandbox/runs.just — readback. What ran, and whether its VM is still alive.
 #
 # This is the half of best-of-N that is not "launch N sandboxes". Launching is
-# easy; the decision needs the results side by side. Every phase writes to
-# .sandbox/runs/<id>.json, so these recipes are pure reads over that plus, while
-# a run is still alive, its trace db on the VM. Per-run cost comes from pi's own
-# accounting: `just obs sessions` shows `total_cost`.
+# easy; the decision needs the results side by side. Every phase writes a record
+# under the state root's runs/ (<local_path>/sssf/runs for app runs, legacy
+# .sandbox/runs for vendored), so these recipes are pure reads over that plus,
+# while a run is still alive, its trace db on the VM. Per-run cost comes from
+# pi's own accounting: `just obs sessions` shows `total_cost`. `run_record.py
+# list` already merges the new location with legacy, newest first.
 #
 # Formatting is done in python rather than a shell read-loop: the record has
 # optional fields, and a tab-delimited read-loop mis-assigns them. One pass, no

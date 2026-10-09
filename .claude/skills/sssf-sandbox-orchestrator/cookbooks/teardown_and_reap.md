@@ -31,7 +31,8 @@ files, and the always-files (`sssf.db`, `run.log`) that git cannot report; gitig
 paths come along. Those are the only unique bytes: the host owns the rest of the tree by construction
 (it cloned the same sha and gate A proved the tree clean), so the old whole-tree `tar` of a box whose run
 changed nothing shipped ~9.95MB of bytes the host already had. An empty delta **skips the transfer**
-entirely. The tar extracts to `.sandbox/runs/<run-id>-artifacts/`.
+entirely. The tar extracts to `<state root>/runs/<run-id>-artifacts/` (`<local_path>/sssf/runs/…`
+for app runs, legacy `.sandbox/runs/…` for vendored) — `run_record.py runs-dir` names the dir.
 
 **2 — harvest the commits, and a failure ABORTS the destroy.** File copies LOSE history, and SSSF
 commits plan, code and docs as **separate commits** — the shape of the run is in the commit graph, not
@@ -75,7 +76,7 @@ Order the failure modes, not the happy path.
 The same reasoning is why harvest is its own recipe. Teardown is the human's call, so a harvest that only
 ran inside teardown would leave commits hostage to a decision nobody has made yet. Standalone and
 idempotent, the exposure window is seconds instead of days. Harvest writes nothing to the run record —
-the bundle's existence at `.sandbox/runs/<run-id>.bundle` **is** the record.
+the bundle's existence at `<state root>/runs/<run-id>.bundle` **is** the record.
 
 ## Inspecting what came home
 

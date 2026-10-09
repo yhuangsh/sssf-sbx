@@ -22,19 +22,36 @@ Exit 0 on success, 1 on usage error.
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]  # sandbox_mount/host/ -> repo root
-sys.path.insert(0, str(REPO_ROOT / "adws"))       # the `uv run adws/adw_*.py` import root
+HOST_DIR = Path(__file__).resolve().parent          # sandbox_mount/host/
+REPO_ROOT = HOST_DIR.parents[1]                     # -> repo root
+sys.path.insert(0, str(REPO_ROOT / "adws"))         # the `uv run adws/adw_*.py` import root
+sys.path.insert(0, str(HOST_DIR))                   # run_record.py, for the state-root rule
 
 from adw_modules.tracer import Tracer
+
+# The historical kernel default. A caller that names THIS path means "default";
+# an app run re-homes it under the state root.
+DEFAULT_DB_REL = "adws/adw_data/sssf.db"
 
 
 def main(argv: list[str]) -> int:
     if len(argv) != 1:
         print("usage: uv run sandbox_mount/host/ensure_trace_db.py <db-path>", file=sys.stderr)
         return 1
-    db = Path(argv[0]).expanduser()
+    raw = argv[0]
+    db = Path(raw).expanduser()
     if not db.is_absolute():
         db = (REPO_ROOT / db).resolve()
+    # State-root re-homing: when the active roster resolves a per-app root and
+    # the caller asked for the plain kernel default, materialize the db there
+    # instead — the same place session.py writes it for a local app run.
+    try:
+        import run_record
+        root = run_record.state_root()
+        if raw == DEFAULT_DB_REL and root is not None:
+            db = root / "sssf.db"
+    except Exception:
+        pass  # never let db resolution block db creation
     existed = db.is_file()
     # Tracer mkdirs the db parent, creates the schema (CREATE TABLE IF NOT EXISTS
     # + additive migrations), and creates the events file's parent dir. Passing

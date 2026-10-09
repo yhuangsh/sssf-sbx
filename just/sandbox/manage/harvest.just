@@ -27,10 +27,12 @@
 # disconnected history. Free integrity check on the return trip.
 #
 # NOT A SEVENTH PHASE. The bundle/verify/fetch half never writes the run record —
-# the bundle's existence at .sandbox/runs/<id>.bundle IS that record, keeping the
-# return trip's integrity state out of the schema. The MERGE half DOES extend the
-# record (harvest_state / merge_sha) — the sanctioned field-extension path — so a
-# run's integration outcome survives the process; the schema stays closed.
+# the bundle's existence at <runs dir>/<id>.bundle IS that record, keeping the
+# return trip's integrity state out of the schema. <runs dir> is the state root's
+# runs/ for an app run (run_record.py runs-dir), legacy .sandbox/runs for vendored.
+# The MERGE half DOES extend the record (harvest_state / merge_sha) — the
+# sanctioned field-extension path — so a run's integration outcome survives the
+# process; the schema stays closed.
 #
 # IDEMPOTENT: re-running overwrites the bundle and force-updates the ref. A
 # re-harvest after a successful merge sees "Already up to date" and re-reports the
@@ -49,11 +51,17 @@ harvest RUN_ID *FLAGS:
 
     RR="sandbox_mount/host/run_record.py"
     RUN_ID="{{ RUN_ID }}"
-    BUNDLE=".sandbox/runs/$RUN_ID.bundle"
+    # State-root-aware runs dir: <local_path>/sssf/runs for app runs, legacy
+    # .sandbox/runs for vendored/kernel-self. run_record owns the rule.
+    RUNS="$("$RR" runs-dir)"
+    BUNDLE="$RUNS/$RUN_ID.bundle"
     # Absolute twin of $BUNDLE for the `git -C <cache>` calls below: `-C` changes
     # git's working directory, so a relative bundle path would resolve against the
     # cache, not the repo root. `cd "{{ justfile_directory() }}"` above fixes $PWD.
-    BUNDLE_ABS="$PWD/$BUNDLE"
+    case "$BUNDLE" in
+        /*) BUNDLE_ABS="$BUNDLE" ;;
+        *)  BUNDLE_ABS="$PWD/$BUNDLE" ;;
+    esac
     BRANCH="sbx/$RUN_ID"
     DEST="refs/sandbox/$RUN_ID"
     HARVEST_REF="refs/harvest/$RUN_ID"
@@ -146,7 +154,7 @@ harvest RUN_ID *FLAGS:
     esac
     read -r _ TIP COUNT <<< "$OUT"
 
-    mkdir -p .sandbox/runs
+    mkdir -p "$RUNS"
     scp "${SSH_OPTS[@]}" -q "$VM".exe.xyz:/tmp/harvest.bundle "$BUNDLE" \
         || { echo "!! harvest: could not copy the bundle off $VM — VM left alone"; exit 1; }
 
@@ -167,9 +175,17 @@ harvest RUN_ID *FLAGS:
         # repo, and the app commits must never be fetched into the factory repo.
         # Verify/fetch into a dedicated bare cache of the app repo instead; a
         # public clone, so unauthenticated.
-        CACHE=".sandbox/repos/$(basename "$APP_REPO" .git).git"
-        CACHE_ABS="$PWD/$CACHE"
-        mkdir -p .sandbox/repos
+        # Harvest cache: <state root or .sandbox>/repos/<app>.git. App-mode caches
+        # start fresh under the app's state root; the vendored hello-server.git
+        # cache stays in .sandbox/repos for kernel-self runs.
+        ROOT="$("$RR" state-root)"
+        [ -n "$ROOT" ] || ROOT=".sandbox"
+        CACHE="$ROOT/repos/$(basename "$APP_REPO" .git).git"
+        case "$CACHE" in
+            /*) CACHE_ABS="$CACHE" ;;
+            *)  CACHE_ABS="$PWD/$CACHE" ;;
+        esac
+        mkdir -p "$ROOT/repos"
         if [ -d "$CACHE" ]; then
             git -C "$CACHE" fetch --quiet --tags origin \
                 || { echo "!! harvest: could not refresh $CACHE — VM left alone"; exit 1; }

@@ -29,7 +29,7 @@ def main(prompt: str, config: str, adw_id: str | None = None) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
     run = session.ensure(cfg, adw_id)
-    payload = git_helper.payload_root(cfg.app, run.repo_root)
+    payload = git_helper.payload_root(cfg.app, run.factory_root)
 
     def record(ph, result) -> None:
         passed = sum(1 for check in result.checks if check.passed)
@@ -70,6 +70,10 @@ def main(prompt: str, config: str, adw_id: str | None = None) -> int:
 
     # Only tested work gets committed — a red suite leaves the tree uncommitted.
     if test is not None and test.passed:
+        # LOCAL mode: relocate this run's kernel-side products into the payload
+        # clone so the commit lands them on the run branch.
+        if cfg.app.local_path:
+            git_helper.route_kernel_products(run.adw_id, payload, run.factory_root)
         with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                    description="Land the code only after the suite came back green")) as ph:
             message = previous.commit_message or f"sssf({run.adw_id}): {previous.summary}"

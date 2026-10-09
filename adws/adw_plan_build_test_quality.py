@@ -31,7 +31,7 @@ def main(prompt: str, config: str, adw_id: str | None = None) -> int:
     cfg = agents.load_config(config)
     agents.validate(cfg, REQUIRED_AGENTS)
     run = session.ensure(cfg, adw_id)
-    payload = git_helper.payload_root(cfg.app, run.repo_root)
+    payload = git_helper.payload_root(cfg.app, run.factory_root)
 
     with run.phase(PhaseParams(name="request", kind="engineer", owner=run.engineer,
                                description="Capture the incoming ask")) as ph:
@@ -82,6 +82,10 @@ def main(prompt: str, config: str, adw_id: str | None = None) -> int:
     verified = (quality_result is not None and quality_result.passed
                 and test_result is not None and test_result.passed)
     if verified:
+        # LOCAL mode: relocate this run's kernel-side products into the payload
+        # clone so the commit lands them on the run branch.
+        if cfg.app.local_path:
+            git_helper.route_kernel_products(run.adw_id, payload, run.factory_root)
         with run.phase(PhaseParams(name="commit", kind="code", owner="git",
                                    description="Commit the tested and quality-verified working tree")) as ph:
             message = previous.commit_message or f"sssf({run.adw_id}): {previous.summary}"

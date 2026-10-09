@@ -41,11 +41,17 @@ from pathlib import Path
 
 import yaml
 
+HOST_DIR = Path(__file__).resolve().parent
 # sandbox_mount/host/local_ui.py -> repo root
-REPO_ROOT = Path(__file__).resolve().parents[2]
-ENSURE_DB = REPO_ROOT / "sandbox_mount" / "host" / "ensure_trace_db.py"
+REPO_ROOT = HOST_DIR.parents[1]
+ENSURE_DB = HOST_DIR / "ensure_trace_db.py"
 PORT_BASE = 4620
 HEALTH_TIMEOUT = 1.5
+
+# run_record.py owns the ONE state-root rule (stdlib only). Import it rather
+# than forking the parse here.
+sys.path.insert(0, str(HOST_DIR))
+import run_record  # noqa: E402
 
 
 def project_key(roster: Path) -> str:
@@ -67,6 +73,12 @@ def resolve_db(roster: Path) -> Path:
     except yaml.YAMLError as error:
         print(f"[local ui] roster is not valid YAML: {roster} ({error})", file=sys.stderr)
         sys.exit(1)
+    # App runs re-home the trace db under the per-app state root; the roster's
+    # observability.db is the vendored/kernel fallback. `ui.port` rides along
+    # because it lives beside the db (db.parent/"ui.port").
+    root = run_record.resolve_state_root(roster)
+    if root is not None:
+        return (root / "sssf.db").resolve()
     rel = ((cfg.get("observability") or {}).get("db")) or "adws/adw_data/sssf.db"
     path = Path(str(rel)).expanduser()
     if not path.is_absolute():

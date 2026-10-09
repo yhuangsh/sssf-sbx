@@ -12,6 +12,7 @@ import signal
 import sys
 from pathlib import Path
 
+from . import state_root
 from .data_types import SSSFConfig
 from .runner import Run
 from .tracer import Tracer
@@ -37,8 +38,12 @@ def _finalize_when_killed(run: Run) -> None:
 
 def ensure(cfg: SSSFConfig, adw_id: str | None = None) -> Run:
     adw_id = adw_id or new_id(8)
-    tracer = Tracer(cfg.observability.db,
-                    f"{cfg.defaults.data_dir}/sessions/{adw_id}/events.jsonl")
+    # App runs re-home the trace db + sessions to the per-app state root
+    # (<local_path>/sssf); vendored/kernel-self runs keep adws/adw_data. See
+    # adw_modules/state_root.py for the one rule.
+    data_dir = state_root.effective_data_dir(cfg.app, cfg.defaults.data_dir)
+    tracer = Tracer(state_root.effective_db(cfg.app, cfg.observability.db),
+                    str(data_dir / "sessions" / adw_id / "events.jsonl"))
     run = Run(cfg=cfg, adw_id=adw_id, tracer=tracer, engineer=engineer_name())
     tracer.session_start(adw_id, run.engineer, adw_name=Path(sys.argv[0]).stem)
     # This process is the run. Record it before any phase opens, so a run that

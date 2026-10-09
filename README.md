@@ -439,26 +439,43 @@ app:
   local_path: /Users/you/projects/<name>   # LOCAL mode payload (this lane)
 ```
 
-### Local projects: isolation and ports
+### State roots: an app run leaves NOTHING in the kernel
 
-Multiple local projects can run on one host without stepping on each other.
-The **project key** is the roster filename's middle part — `sssf.<key>.config.yaml`
-→ `<key>`; the bare `sssf.config.yaml` → `kernel` — and it namespaces that
-project's runtime state:
+Multiple local projects can run on one host without stepping on each other, and
+an app run never accumulates files in the kernel tree. Every run resolves a
+**state root** from the active roster (`SSSF_CONFIG`), and all run state lives
+there:
 
 ```
-adws/adw_data/                  kernel's own trace (sssf.config.yaml)
-adws/adw_data/local/<key>/      every other project
-  sssf.db                         its trace db (roster observability.db)
-  sessions/                       its session dirs (roster defaults.data_dir)
-  ui.port                         the recorded visualizer UI port (one integer)
+<local_path>/sssf/             LOCAL mode / target mode WITH app.local_path
+~/.sssf/apps/<app-key>/        target mode WITHOUT app.local_path (sandbox-only)
+.sandbox/ + adws/adw_data/     vendored (kernel-self) — UNCHANGED, kernel-owned
 ```
 
-`just local scaffold` writes the namespaced `defaults.data_dir` /
-`observability.db` for `<name>` automatically, so every scaffolded project is
-isolated out of the box; the shipped hello roster is `local/hello`. `just obs …`
-and `just local ui` both resolve the db from the active roster (`SSSF_CONFIG`),
-so they read the project's own trace, not the kernel's.
+Layout under a state root:
+
+```
+sssf/
+  runs/<id>.json                 the run record
+  runs/<id>-artifacts/           teardown-pulled trace copy (+ db)
+  runs/<id>.bundle               harvest bundle
+  runs/<id>.watcher.log          issue-watcher log
+  repos/<app>.git                harvest bare cache
+  sssf.db                        the trace db
+  sessions/                      session dirs (agent_map, prompts, handoffs)
+  ui.port                        the recorded visualizer UI port (one integer)
+```
+
+`app-key` is the sanitized basename of `app.repo` (minus `.git`, lowercased,
+non-alphanumerics collapsed to `-`): `hello-server.git` → `hello-server`.
+`run_record.py` owns the rule (subcommands `state-root` / `runs-dir` / `migrate`);
+`adw_modules/state_root.py` applies it to the chain's live trace db + sessions.
+Legacy `.sandbox/runs/` records stay READABLE — reads search the new location
+first, then legacy — and `SSSF_CONFIG=<roster> run_record.py migrate` moves them
+into their state root (non-destructively). `just local scaffold` no longer
+writes a per-project namespace: new rosters carry plain defaults and rely on
+resolution. `just obs …` and `just local ui` both resolve the db through the same
+rule, so they read the project's own trace, not the kernel's.
 
 **Port rules.** `just local ui` records a **stable per-project port** in
 `<db dir>/ui.port`. On first use it allocates the first free pair scanning

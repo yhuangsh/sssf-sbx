@@ -12,9 +12,9 @@ decision reads off one screen instead of a scavenger hunt.
 
 READ-ONLY, HOST-SIDE ONLY. It never touches a VM (no ssh), never writes a ref,
 never runs a check. Commits come from the harvested app cache
-(.sandbox/repos/<app>.git, ref refs/sandbox/<id>) or, failing that, from the
-local clone (refs/harvest/<id> / sbx/<id>). Tokens/cost come from the pulled
-artifact trace db when a teardown has copied it.
+(<state root or .sandbox>/repos/<app>.git, ref refs/sandbox/<id>) or, failing
+that, from the local clone (refs/harvest/<id> / local/<id>). Tokens/cost come
+from the pulled artifact trace db when a teardown has copied it.
 """
 
 from __future__ import annotations
@@ -28,12 +28,21 @@ from pathlib import Path
 
 HOST_DIR = Path(__file__).resolve().parent
 REPO_ROOT = HOST_DIR.parents[1]
-RUNS_DIR = REPO_ROOT / ".sandbox" / "runs"
 DEFAULT_DB_REL = "adws/adw_data/sssf.db"
 
-# run_record.py is the sanctioned store. Import it directly (host-side, stdlib).
+# run_record.py is the sanctioned store. Import it directly (host-side, stdlib);
+# it also owns the state-root rule, so no .sandbox/runs is hardcoded here.
 sys.path.insert(0, str(HOST_DIR))
 import run_record  # noqa: E402
+
+
+def _runs_dir() -> Path:
+    return run_record.runs_dir()
+
+
+def _cache_root() -> Path:
+    root = run_record.state_root()
+    return root if root is not None else run_record.LEGACY_RUNS_DIR.parent
 
 
 def _roster() -> dict:
@@ -72,20 +81,20 @@ def _find_ref(run_id: str) -> tuple[str, str]:
         bn = app_repo.rstrip("/").rsplit("/", 1)[-1]
         if bn.endswith(".git"):
             bn = bn[:-4]
-        cache = REPO_ROOT / ".sandbox" / "repos" / f"{bn}.git"
+        cache = _cache_root() / "repos" / f"{bn}.git"
         if cache.is_dir() and _git(str(cache), "rev-parse", "--verify", "--quiet",
                                    f"refs/sandbox/{run_id}").returncode == 0:
             return str(cache), f"refs/sandbox/{run_id}"
     local = _app_local()
     if local and Path(local, ".git").exists():
-        for ref in (f"refs/harvest/{run_id}", f"sbx/{run_id}"):
+        for ref in (f"refs/harvest/{run_id}", f"local/{run_id}", f"sbx/{run_id}"):
             if _git(local, "rev-parse", "--verify", "--quiet", ref).returncode == 0:
                 return local, ref
     return "", ""
 
 
 def _tokens_cost(run_id: str) -> str:
-    db = RUNS_DIR / f"{run_id}-artifacts" / _roster_db_rel()
+    db = _runs_dir() / f"{run_id}-artifacts" / _roster_db_rel()
     if not db.is_file():
         return "n/a (no artifact db)"
     try:

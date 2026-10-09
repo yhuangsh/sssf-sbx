@@ -161,8 +161,9 @@ execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA:
     # outcome; if it dies, `teardown` and `just sbx manage sync-issues` are the
     # backstops, which is why this is never allowed to fail the execute.
     if [ "$ISSUES_ON" = 1 ]; then
-        mkdir -p .sandbox/runs
+        RUNS="$("$RR" runs-dir)"
+        mkdir -p "$RUNS"
         ( nohup uv run "$TRACKER" watch {{RUN_ID}} --since "$SINCE" \
-            > ".sandbox/runs/{{RUN_ID}}.watcher.log" 2>&1 < /dev/null & echo "→ issue watcher pid $!" )
+            > "$RUNS/{{RUN_ID}}.watcher.log" 2>&1 < /dev/null & echo "→ issue watcher pid $!" )
     fi
     echo "→ watch it:  just sbx run cmd {{RUN_ID}} 'tail -f run.log'"

@@ -141,8 +141,9 @@ failure, and `just sbx run cmd <run-id> 'tail -40 ~/visualizer.log'` gets them a
 
 Everything above stays on the VM until teardown pulls it. `teardown` extracts a **gzipped delta-tar** of
 the run's own changes under `specs app_docs adws/adw_data/sssf.db run.log` (plus the target's manifest
-in target mode) into `.sandbox/runs/<run-id>-artifacts/`, and harvests the commits into a `git bundle`
-at `.sandbox/runs/<run-id>.bundle`. Inspect the commits locally with:
+in target mode) into `<state root>/runs/<run-id>-artifacts/` (`<local_path>/sssf/…` for app runs,
+legacy `.sandbox/runs/…` for vendored), and harvests the commits into a `git bundle` at
+`<state root>/runs/<run-id>.bundle`. Inspect the commits locally with:
 
 ```bash
 just sbx manage harvest <run-id>

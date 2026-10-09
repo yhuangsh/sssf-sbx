@@ -56,7 +56,8 @@ def capture(run, params: ChangeCapture) -> ChangeSet:
     so the diff is taken there (the caller's `base` must name a commit in THAT
     repo). Vendored mode resolves to the factory root — byte-identical to before.
     """
-    repo = git_helper.payload_root(getattr(run.cfg, "app", None), run.repo_root)
+    repo = git_helper.payload_root(getattr(run.cfg, "app", None),
+                                   getattr(run, "factory_root", run.repo_root))
     base = resolve_base(params.base, repo=repo)
     files = git_helper.diff_files(base.commit, repo=repo)
     untracked = git_helper.untracked_files(repo=repo) if params.include_untracked else []
