@@ -1,8 +1,9 @@
 # just/sandbox/manage/mod.just — auxiliary: preflight, readback, fleet ops.
 #
 # Nothing here is a phase. `doctor`/`list` read only; `harvest` writes the bundle
-# and its ref but never the run record; `sync-issues` is the one exception that
-# does write the record (it reconciles `issue_state` for runs whose watcher died).
+# and its ref AND, in merge mode, the run record's harvest_state/merge_sha and a
+# comment on the run's issue; `sync-issues` is another exception that writes the
+# record (it reconciles `issue_state` for runs whose watcher died).
 #
 # A module inherits nothing, so the settings are repeated here with one more `..`
 # than the parent. dotenv-load matters in this one: `doctor` checks that every
@@ -13,6 +14,7 @@ set dotenv-load
 
 import 'list.just'
 import 'harvest.just'
+import 'compare.just'
 import 'sync_issues.just'
 
 # list the management commands

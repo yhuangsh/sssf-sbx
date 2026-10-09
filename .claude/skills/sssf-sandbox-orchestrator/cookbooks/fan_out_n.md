@@ -124,9 +124,41 @@ for, and FILL gates that they match.
 
 ## Ranking the arms
 
-`just sbx manage list` gives you state and VM liveness for every run. Beyond that,
-`just sbx manage harvest <id>` each arm and diff the refs against each other with plain git — that is
-the honest comparison anyway: the code is the artifact, not a score.
+`just sbx manage list` gives you state and VM liveness for every run. Harvest has **two integration
+modes**, and a fan-out picks by what the arms are:
+
+### Competing arms (best-of-N) — the special case
+
+The arms are **alternatives**: there is nothing to merge, so harvest each arm bundle-only and then
+compare them side by side.
+
+```bash
+just sbx manage harvest <id> --no-merge     # bundle-only, no merge attempted
+just sbx manage compare <id1> <id2> ...     # outcome, commits, diffstat, tokens+cost, issue link
+```
+
+`compare` is read-only and host-side: per run it prints the outcome (`accepted`/`failed`), the
+commits BASE..HEAD with messages, the diffstat, tokens + cost, and the issue link. For the deeper
+dive, diff the refs against each other with plain git — the code is the artifact, not a score:
+
+```bash
+git -C .sandbox/repos/hello-server.git diff refs/sandbox/<id1>..refs/sandbox/<id2>
+```
+
+### Parallel-orthogonal arms — the common case
+
+The arms are **complements**: they land on the same trunk, so plain harvest **merges by default**.
+
+```bash
+just sbx manage harvest <id>                # fetch + merge into base_ref in app.local_path
+```
+
+Each merge goes into the roster's `app.local_path` clone (the run's `base_ref`, default `main`). A
+conflict is a named abort — the merge is rolled back, the run branch stays fetched, the run is marked
+`harvested-unmerged`, and the exact manual-resolution commands are printed. If the merge is textually
+clean but the manifest's checks fail against the merged tree, the merge is reverted locally, the run
+is marked `merge-broke-build`, and the issue is reopened with `sssf:merged-broken`. **Push is always
+human** — harvest never pushes.
 
 Where each column comes from:
 
@@ -194,6 +226,12 @@ mounted through it. Treat the first one as an experiment, not an optimization.
 N sandboxes means N live VMs, all billing until someone decides otherwise. Nothing expires and nothing
 auto-destroys. Tear each arm down explicitly when you have its artifacts — harvest runs first, and a
 failed harvest aborts the destroy (see `teardown_and_reap.md`).
+
+**Competing arms:** teardown calls plain `just sbx manage harvest <id>`, which now **merges by
+default** — and alternative arms have nothing to merge. Harvest them yourself with `--no-merge`
+first (bundle-only), then tear down; the bundle is already home, so teardown's merge attempt re-fetches
+the same ref and is a no-op on an already-merged run. If you would rather skip harvest wholesale,
+`just sbx lifecycle teardown <id> --no-harvest` is the escape hatch.
 
 There is **no `reap` recipe** in this kernel. The backstop for an arm whose teardown never ran is to
 list and filter by hand:

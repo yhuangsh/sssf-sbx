@@ -82,6 +82,7 @@ LABELS = {
     "sssf:cancelled": ("fbca04", "SSSF session torn down mid-run"),
     "sssf:follow-up": ("5319e7", "SSSF re-run of a failed session"),
     "sssf:local":     ("0075ca", "SSSF session ran on the host (local mode)"),
+    "sssf:merged-broken": ("d93f0b", "SSSF merge passed textually but broke the checks"),
 }
 
 _SECRET_NAME = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD)", re.IGNORECASE)
@@ -463,6 +464,24 @@ def _harvest_status(run_id: str, rec: dict | None, commits: list[str],
         payload = _local_path_quiet() or "<local_path>"
         return (f"local mode — commits are on branch `sbx/{run_id}` in `{payload}`; "
                 "push when ready (no bundle)")
+    # The record's integration outcome wins when HARVEST has written one — it is
+    # the durable truth (merged / harvested-unmerged / merge-broke-build /
+    # bundle-only); the bundle line below is the backwards-compatible fallback.
+    state = (rec or {}).get("harvest_state")
+    base_ref = (rec or {}).get("base_ref") or "main"
+    merge_sha = (rec or {}).get("merge_sha")
+    if state == "merged":
+        return (f"merged into `{base_ref}` as `{merge_sha}` — the merge is in the "
+                "local clone only; push stays human")
+    if state == "harvested-unmerged":
+        return (f"harvested-unmerged — a conflict merging into `{base_ref}` was "
+                "aborted; the run branch is fetched, resolve it manually")
+    if state == "merge-broke-build":
+        return (f"merge-broke-build — merged, then reverted after the checks failed"
+                f"{f' (merge sha `{merge_sha}`)' if merge_sha else ''}; "
+                "resolve the checks and re-apply the merge")
+    if state == "bundle-only":
+        return f"bundle-only — awaiting integration decision"
     bundle = RUNS_DIR / f"{run_id}.bundle"
     if not bundle.is_file():
         return (f"not harvested — no bundle at `{bundle.relative_to(REPO_ROOT)}` "
@@ -945,6 +964,77 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _harvest_comment(args: argparse.Namespace, rec: dict) -> str:
+    """The body of a harvest comment for one of the four integration outcomes."""
+    base_ref = args.base_ref or rec.get("base_ref") or "main"
+    sha = args.merge_sha or "(unknown)"
+    local = _local_path_quiet() or "<app.local_path>"
+    run_id = args.run_id
+    if args.result == "merged":
+        return (f"## Harvest — merged\n\n"
+                f"Merged into `{base_ref}` as `{sha}`.\n\n"
+                "The merge is in the app's local clone only — **push stays human**.")
+    if args.result == "bundle-only":
+        return ("## Harvest — bundle-only\n\n"
+                "bundle-only — awaiting integration decision.")
+    if args.result == "unmerged":
+        conflicts = " ".join(str(c) for c in (args.conflicts or "").split() if c)
+        files = "\n".join(f"- `{f}`" for f in conflicts.split()) or "_(none reported)_"
+        return (f"## Harvest — conflict (not merged)\n\n"
+                f"Merging the run branch into `{base_ref}` hit conflicts. The merge "
+                "was **aborted** — the local clone is clean and the run branch is "
+                "fetched. Run marked `harvested-unmerged`.\n\n"
+                f"**Conflicting files:**\n\n{files}\n\n"
+                "**Resolve manually** (nothing is pushed):\n\n"
+                "```bash\n"
+                f"git -C {local} checkout {base_ref}\n"
+                f"git -C {local} merge refs/harvest/{run_id}\n"
+                "# resolve the conflicts, then:\n"
+                f"git -C {local} add <files> && git -C {local} commit\n"
+                "```")
+    # broke-build
+    failing = " ".join(str(c) for c in (args.failing_checks or "").split() if c)
+    failing_line = ("**Failing checks:** " + ", ".join(f"`{c}`" for c in failing.split())
+                    if failing else "**Failing checks:** see the harvest run output")
+    return (f"## Harvest — merge broke the build\n\n"
+            f"The merge into `{base_ref}` was textually clean (merge sha `{sha}`), "
+            "but the post-merge checks **FAILED**. The merge was reverted locally; "
+            "the run branch stays fetched.\n\n"
+            f"{failing_line}\n\n"
+            "Reopening this issue until the merge is resolved.")
+
+
+def cmd_harvest(args: argparse.Namespace) -> int:
+    if _issues_disabled():
+        print("issues: disabled (SSSF_ISSUES=0) — not recording the harvest")
+        return 0
+    rec = get_record(args.run_id)
+    if rec is None:
+        return 0
+    repo = _repo_from_record(rec)
+    num = rec.get("issue_number")
+    if not repo or not num:
+        warn(f"no issue recorded for {args.run_id} — nothing to comment")
+        return 0
+    if not gh_auth_ok():
+        warn("gh is not authenticated on this host — skipping harvest comment")
+        return 0
+    ensure_labels(repo)
+    body = redact(_harvest_comment(args, rec))
+    r = gh(["issue", "comment", str(num), "--repo", repo, "--body", body])
+    if r.returncode != 0:
+        warn(f"harvest comment failed: {r.stderr.strip()[:200]}")
+        return 0
+    print(f"issues: harvest '{args.result}' -> #{num}")
+    if args.result == "broke-build":
+        # A textual merge that broke the checks is NOT done: reopen the issue and
+        # label it until a human resolves it. The tracker never removes the label.
+        gh(["issue", "reopen", str(num), "--repo", repo])
+        gh(["issue", "edit", str(num), "--repo", repo,
+            "--add-label", "sssf:merged-broken"])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -983,6 +1073,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("sync", help="reconcile issues left open by a dead watcher")
     s.set_defaults(func=cmd_sync)
+
+    h = sub.add_parser("harvest", help="record a harvest outcome on the run's issue")
+    h.add_argument("run_id")
+    h.add_argument("--result", required=True,
+                   choices=["merged", "unmerged", "broke-build", "bundle-only"])
+    h.add_argument("--merge-sha", default=None)
+    h.add_argument("--base-ref", default=None)
+    h.add_argument("--conflicts", default=None,
+                   help="space-separated conflicting files (unmerged)")
+    h.add_argument("--failing-checks", default=None,
+                   help="space-separated failing check names (broke-build)")
+    h.set_defaults(func=cmd_harvest)
     return p
 
 

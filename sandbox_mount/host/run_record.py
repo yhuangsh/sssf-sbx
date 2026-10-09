@@ -61,6 +61,17 @@ FIELDS = (
     "issue_number",       # int — the issue number in that repo
     "issue_state",        # open | accepted | failed | cancelled (tracker's view)
     "prev_issue_number",  # int — the issue this run's previous execute opened
+    # ── harvest integration modes (just/sandbox/manage/harvest.just) ────────
+    # The sanctioned field-extension path again (same as `ports` and the issue
+    # block above): the schema stays closed, unknown keys are still rejected.
+    # `base_ref`/`base_sha` are the merge anchor FILL records in target mode;
+    # `merge_mode` is the run's default (merge), `harvest_state`/`merge_sha` are
+    # written by HARVEST once it lands (or declines to land) the commits.
+    "base_ref",           # branch the run started from (roster app.ref, default main)
+    "base_sha",           # the sha base_ref pointed at when the run filled
+    "merge_mode",         # merge | bundle-only — the run's default integration mode
+    "harvest_state",      # null | bundle-only | merged | harvested-unmerged | merge-broke-build
+    "merge_sha",          # merge commit (or fast-forward tip) in the local clone
 )
 
 # Identity, not state. run_id is also the filename, so rewriting it would leave
@@ -100,6 +111,11 @@ def create(run_id: str) -> dict:
     record = {f: None for f in FIELDS}
     record["run_id"] = run_id
     record["created_at"] = _now()
+    # Seed the integration default so old and new records read alike: MERGE is
+    # the common case (parallel-orthogonal features on one repo); bundle-only is
+    # the special case (competing fan-out arms) and is opted into per run with
+    # `harvest --no-merge`. FILL refines this to bundle-only in vendored mode.
+    record["merge_mode"] = "merge"
 
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     target = path(run_id)

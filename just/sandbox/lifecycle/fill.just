@@ -257,7 +257,10 @@ fill RUN_ID *SHA:
 
     if [ "$MODE" = vendored ]; then
         # Phase 0/1: factory and payload are one clone, so commit_sha is its HEAD.
-        "$RR" set {{RUN_ID}} commit_sha="$HEAD_SHA"
+        # Vendor the merge mode too: MERGE is a target-mode feature (there is no
+        # separate app clone to merge into) — record bundle-only so a vendored
+        # run never reads as mergeable.
+        "$RR" set {{RUN_ID}} commit_sha="$HEAD_SHA" merge_mode=bundle-only
         echo "==> fill: vendored payload — commit_sha = factory_sha = $HEAD_SHA"
     else
         # ── the target clone: the payload the run actually commits to ─────────
@@ -396,8 +399,14 @@ fill RUN_ID *SHA:
 
         # commit_sha is what makes N runs comparable, so record the sha that is
         # actually checked out on the target, never the one that was asked for.
-        "$RR" set {{RUN_ID}} commit_sha="$TARGET_SHA"
-        echo "==> fill: target payload — commit_sha $TARGET_SHA (factory_sha $HEAD_SHA)"
+        # base_ref/base_sha are the MERGE ANCHOR: the branch this run started
+        # from, and its sha at fill time (base_sha duplicates commit_sha today;
+        # both are recorded because commit_sha stays HARVEST's bundle baseline
+        # and base_sha is what the merge targets). `app.ref` empty means the
+        # clone's default branch — which FILL checked out — so default `main`.
+        BASE_REF=${APP_REF:-main}
+        "$RR" set {{RUN_ID}} commit_sha="$TARGET_SHA" base_ref="$BASE_REF" base_sha="$TARGET_SHA"
+        echo "==> fill: target payload — commit_sha $TARGET_SHA (base_ref $BASE_REF, factory_sha $HEAD_SHA)"
     fi
 
     # ── ship the roster + a derived settings.json ────────────────────────────

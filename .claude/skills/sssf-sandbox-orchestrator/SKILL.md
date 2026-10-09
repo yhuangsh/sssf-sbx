@@ -1,6 +1,6 @@
 ---
 name: sssf-sandbox-orchestrator
-description: Drive the sandbox mount system from the host — mount throwaway exe.dev VMs, run the Super Simple Software Factory inside them, watch from outside, harvest the commits, tear down. Use when the user says mount a sandbox, run the factory in a sandbox, spin up N sandboxes, best-of-N, check on a run, harvest a run's commits, or tear down. Keywords - sandbox, mount, exe.dev VM, run id, fan out, best-of-N, harvest, bundle, teardown.
+description: Drive the sandbox mount system from the host — mount throwaway exe.dev VMs, run the Super Simple Software Factory inside them, watch from outside, harvest the commits, tear down. Use when the user says mount a sandbox, run the factory in a sandbox, spin up N sandboxes, best-of-N, check on a run, harvest a run's commits, merge a run into the trunk, or tear down. Keywords - sandbox, mount, exe.dev VM, run id, fan out, best-of-N, harvest, merge, bundle, compare, teardown.
 argument-hint: "[mount|execute|agent|observe|harvest|teardown] [run-id or prompt]"
 ---
 
@@ -123,7 +123,10 @@ Keep the lanes separate — users conflate steering with the factory:
   inside the box: no chains, no gates, no commits.
 - **`just sbx lifecycle execute`** — the factory: the full SDLC with gates, reviews, and commits to
   the run branch `sbx/<run-id>`.
-- **`just sbx manage harvest`** — bringing the run's commits home.
+- **`just sbx manage harvest`** — bringing the run's commits home: **merge** into `base_ref` in the
+  app's local clone (the default — parallel-orthogonal features), or `--no-merge` for bundle-only
+  (competing fan-out arms). A conflict or a merge that breaks the checks aborts with a named state;
+  push stays human.
 - **`just sbx mount` / `just sbx lifecycle teardown`** — the only times a sandbox is created or
   destroyed. A fresh mount is for a clean box, never needed just to test a change.
 
@@ -154,7 +157,8 @@ their own contents when run bare.
 | `just sbx run agent RUN_ID "PROMPT"` | one **pi** turn inside the box, resumable `--session-id` — hand off, then keep talking |
 | `just sbx lifecycle observe RUN_ID` | start the app (roster `app.path`, manifest `serve:` port) and the trace UI, expose the app port, print URLs. A manifest with no `serve:` skips the app lane. |
 | `just sbx manage list` | every run record: state and VM liveness |
-| `just sbx manage harvest RUN_ID` | pull the run's commits home as a git bundle, fetched into `refs/sandbox/<run-id>`. Non-destructive, idempotent, run it any time. |
+| `just sbx manage harvest RUN_ID [--no-merge]` | fetch the run's commits home as a git bundle and, by default, **merge** them into `base_ref` (`app.local_path`); `--no-merge` is bundle-only for competing runs. Non-destructive to your own branches, never pushes. |
+| `just sbx manage compare <id1> <id2> ...` | read-only side-by-side: outcome, commits BASE..HEAD, diffstat, tokens+cost, issue link. |
 | `just sbx lifecycle teardown RUN_ID [--no-harvest]` | artifacts (a gzipped delta-tar) → **harvest** → destroy → close. **The only destructive recipe**; a harvest failure aborts before the destroy. |
 
 The run id is the handle for every phase. `create` appends `-<date>-<6 hex>` if you did not, and
