@@ -247,6 +247,95 @@ execute RUN_ID CHAIN PROMPT:
     fi
     exit "$RC"
 
+# close local run records — the local lane's finish verb. There is no VM to
+# tear down, so this is ALL that "ending" a local run means: stamp closed_at
+# (UTC, the same format teardown writes) and print a finish summary. NEVER
+# deletes the run branch and NEVER touches non-local (VM) records.
+#   just local close <run-id>   close one record (idempotent)
+#   just local close --all      close EVERY open local record (vm_name == 'local', closed_at empty)
+close RUN_ID:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    RR="sandbox_mount/host/run_record.py"
+
+    # SSSF_CONFIG is REQUIRED — the shared guard prints THE named error and exits.
+    ROSTER=$(sandbox_mount/host/require_sssf_config.sh)
+    export SSSF_CONFIG="$ROSTER"
+
+    if [ "{{RUN_ID}}" = "--all" ]; then
+        # Bulk-close every OPEN local record. `list` merges the state root AND
+        # legacy .sandbox/runs, so legacy local records are closed too (written
+        # in place by run_record). VM records (vm_name != 'local') are skipped.
+        mapfile -t IDS < <("$RR" list | python3 -c 'import json,sys; [print(r["run_id"]) for r in json.load(sys.stdin) if r.get("vm_name") == "local" and not r.get("closed_at")]')
+        if [ "${#IDS[@]}" -eq 0 ]; then
+            echo "no open local run records — nothing to close"
+            exit 0
+        fi
+        for id in "${IDS[@]}"; do
+            "$RR" close "$id"
+            echo "closed: $id"
+        done
+        echo "closed ${#IDS[@]} local run record(s)"
+        exit 0
+    fi
+
+    # ── single-run close ────────────────────────────────────────────────────
+    if ! "$RR" get "{{RUN_ID}}" >/dev/null 2>&1; then
+        echo "[local close] no run record for {{RUN_ID}} — nothing to close" >&2
+        exit 1
+    fi
+    CLOSED=$("$RR" get "{{RUN_ID}}" closed_at)
+    if [ -n "$CLOSED" ]; then
+        echo "{{RUN_ID}} already closed (closed_at=$CLOSED) — nothing to do"
+        exit 0
+    fi
+    "$RR" close "{{RUN_ID}}"   # stamps closed_at UTC, the format teardown uses
+
+    # ── FINISH SUMMARY (a few lines) ────────────────────────────────────────
+    TAG=$("$RR" get "{{RUN_ID}}" tag)
+    BASE=$("$RR" get "{{RUN_ID}}" base_ref)
+    ISSUE=$("$RR" get "{{RUN_ID}}" issue_url)
+    STATE=$("$RR" state-root)
+
+    # target repo + the payload clone (same flat two-space awk as mount/execute)
+    APP_REPO=$(awk '
+      /^app:[[:space:]]*$/      { a=1; next }
+      /^[^[:space:]]/           { a=0 }
+      a && /^[[:space:]]+repo:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    APP_LOCAL=$(awk '
+      /^app:[[:space:]]*$/      { a=1; next }
+      /^[^[:space:]]/           { a=0 }
+      a && /^[[:space:]]+local_path:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
+    LOCAL_PATH="${APP_LOCAL/#\~/$HOME}"
+    BRANCH="local/{{RUN_ID}}"
+    SURVIVING=""
+    if [ -n "$LOCAL_PATH" ] && git -C "$LOCAL_PATH" rev-parse --git-dir >/dev/null 2>&1; then
+        SURVIVING=$(git -C "$LOCAL_PATH" branch --list "$BRANCH")
+    fi
+
+    echo ""
+    echo "FINISH SUMMARY"
+    echo "  run:     {{RUN_ID}}${TAG:+ (tag: $TAG)}"
+    echo "  closed:  $("$RR" get "{{RUN_ID}}" closed_at)"
+    if [ -n "$APP_REPO" ]; then
+        echo "  target:  $APP_REPO"
+    fi
+    if [ -n "$BASE" ]; then
+        echo "  base:    $BASE"
+    fi
+    if [ -n "$SURVIVING" ]; then
+        echo "  branch:  $BRANCH (survives in $LOCAL_PATH — close does not delete branches)"
+    fi
+    if [ -n "$ISSUE" ]; then
+        echo "  issue:   $ISSUE"
+    fi
+    if [ -n "$STATE" ]; then
+        echo "  state:   $STATE/"
+    fi
+
 # serve the trace visualizer against THE PROJECT'S db, on a stable per-project
 # port pair recorded in <db dir>/ui.port (UI port; api is UI+1). A re-run is
 # idempotent, and a recorded port held by something else warns + auto-bumps.

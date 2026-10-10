@@ -429,6 +429,10 @@ just local orch cc adws/adw_sssf_config/sssf.<app>.config.yaml
 just local orch pi adws/adw_sssf_config/sssf.<app>.config.yaml
 ```
 
+A local session ends with `just local close <run-id>` — there is no VM teardown,
+and without it the run record stays open forever (`just local close --all`
+bulk-closes every open local record).
+
 The only roster difference is one key — the local payload:
 
 ```yaml
