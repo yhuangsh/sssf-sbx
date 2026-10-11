@@ -253,7 +253,7 @@ is why they take an explicit `CONFIG` argument rather than reading
 | `just sbx run agent` / `just sbx run cmd` | no | record-driven; the sandbox pi reads what `fill` shipped |
 | `just sbx manage list` | no | reads run records only |
 | `just local mount` | yes | preflight parses the roster's `app:` block (incl. `app.local_path`) |
-| `just local execute` | yes | the chain's `--config` comes from it; the issue tracker reads `app.repo` |
+| `just local execute` | yes | the chain's `--config` comes from it; the issue tracker reads `app.repo` (or this repo's origin in kernel-self vendored mode) |
 | `just local doctor` | yes | roster provider-key preflight + payload resolution |
 | `just local ui` | no | reads the local trace db only |
 | `just local orch cc\|pi <roster>` | yes (as an argument) | the roster is the mandatory argument, validated and exported for the session |
@@ -317,9 +317,11 @@ just sbx lifecycle teardown my-run
 
 Every `execute` opens **one GitHub issue per run in the app's own repo** (the
 roster's `app.repo`) before the SDLC starts, and closes it with the full audit
-record when the session ends. Target mode only: a vendored roster has no
-separate app repo and skips with a named message. Issue tracking is a durable
-record of instruction → outcome, independent of the disposable sandbox.
+record when the session ends. A vendored roster (no `app.repo`) is **kernel-self**
+— it resolves *this repo's* github.com origin and files under `sssf:kernel`; a
+named skip covers no origin, a non-github.com origin, or unauthenticated `gh`.
+Issue tracking is a durable record of instruction → outcome, independent of the
+disposable sandbox.
 
 What opens when:
 
@@ -345,10 +347,12 @@ State labels:
 | `sssf:failed` | session failed — closed as not planned, with failure forensics (failing phase, gate/review detail, error verbatim, surviving-state note) |
 | `sssf:cancelled` | torn down mid-run — closed as not planned |
 | `sssf:follow-up` | this run re-executes a run record whose previous session failed; the body links `Follow-up to #N` |
+| `sssf:kernel` | vendored kernel-self run — the issue lives in this repo's own GitHub origin, not an app repo |
 
 - `SSSF_ISSUES=0` disables issue tracking entirely; `execute` prints a named skip.
-- Vendored mode (no `app.repo`) also skips with a named message — issues live in
-  the app's own repo, and vendored mode has no separate one.
+- Vendored mode (no `app.repo`) is kernel-self: the issue opens in *this repo's*
+  github.com origin labeled `sssf:kernel`, or prints a named skip when there is
+  no origin, the origin is not github.com, or `gh` is unauthenticated.
 - `just sbx manage sync-issues` reconciles issues left open by a dead watcher or
   a rebooted host, from the live VM or the teardown-pulled trace copy.
 
@@ -539,3 +543,54 @@ the kernel is never the payload of an app run. A `local_path` that resolves
 inside the kernel fails with a named error (in `payload_root`, and in `just local
 mount`) rather than running an app against the factory's own source.
 
+## Developing sssf-sbx itself
+
+The kernel is its own first-class app. Because the shipped roster sets **no
+`app.repo`**, the run is **VENDORED** mode: the payload is *this tree*, and the
+kernel develops itself with the same chains, gates, reviews, and issue tracking
+it gives any app.
+
+**Setup.** Clone the repo, then:
+
+```sh
+cp .env.sample .env         # set the LLM keys your roster's models need
+```
+
+Point `SSSF_CONFIG` at the shipped roster — for self-development it is **not a
+template to copy, it IS the config**:
+
+```sh
+SSSF_CONFIG=adws/adw_sssf_config/sssf.config.yaml   # add to .env, or inline
+```
+
+**Two lanes, one workflow.**
+
+*Host-instant* — run the chain directly in your terminal, or take the tracked
+variant (run branch `local/<id>` in this repo):
+
+```sh
+just adw sdlc "add X"                       # direct, no run record
+just local mount my-run
+just local execute my-run sdlc "add X"
+just local ui
+```
+
+*VM-isolated* — the kernel develops itself on a disposable VM; harvest bundles
+the commits home:
+
+```sh
+just sbx mount my-run
+just sbx lifecycle execute my-run "add X"
+just sbx manage harvest my-run
+```
+
+**The provenance rule.** Kernel-self runs **MAY** add `specs/` and `app_docs/`
+in this repo — here the kernel *is* the project, so its plans and write-ups
+belong in the tree. A run against an app must **never** populate them: an app's
+state root lives at the payload, and the kernel tree stays clean.
+
+**Issue tracking.** Kernel-self runs open and close issues in this repo's own
+GitHub origin (`yhuangsh/sssf-sbx`), labeled **`sssf:kernel`** — the project's
+public development log. Same open → milestone → close lifecycle as any run; see
+[Session tracking](#session-tracking-github-issues) above. `SSSF_ISSUES=0` still
+disables it, and a non-github.com origin or missing `gh` auth is a named skip.

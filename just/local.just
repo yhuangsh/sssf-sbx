@@ -19,6 +19,10 @@
 # to that clone's run branch `local/<run-id>`. The kernel is NEVER the payload of
 # an app run — a local_path inside this repo is a named error.
 #
+# KERNEL-SELF (vendored): when the roster has NEITHER `repo` NOR `local_path`,
+# the payload is THIS kernel tree (see README -> Developing sssf-sbx itself);
+# the run branch `local/<run-id>` lives in this repo (label `sssf:kernel`).
+#
 # A module inherits NOTHING from its parent — not variables, not settings, and
 # its working directory defaults to its own file's directory. Hence the `set`
 # lines below; `..` puts every recipe at the repo root (same shape as
@@ -75,31 +79,44 @@ mount RUN_ID:
     ' "$ROSTER")
     APP_MANIFEST="${APP_MANIFEST:-sssf.app.yaml}"
 
-    # ── resolve the payload: local_path wins, and it must NOT be inside the
-    # kernel tree — the kernel is never the payload of an app run ─────────────
+    # ── resolve the payload. Three cases:
+    #   local_path set            -> that clone; it must NOT be inside the
+    #                                kernel tree (the kernel is never the
+    #                                payload of an app run)
+    #   local_path empty, repo set-> nothing to run host-side without a clone
+    #   BOTH empty                -> VENDORED KERNEL-SELF: the payload is THIS
+    #                                kernel tree (label sssf:kernel)
     KERNEL_ROOT="$(pwd -P)"
+    KERNEL_SELF=0
     if [ -z "$APP_LOCAL" ]; then
-        echo "[local mount] roster has no app.local_path — run 'just local scaffold' or add local_path: to the app: block" >&2
-        exit 1
-    fi
-    LOCAL_PATH="${APP_LOCAL/#\~/$HOME}"
-    case "$LOCAL_PATH" in
-        /*) ;;
-        *)  LOCAL_PATH="$KERNEL_ROOT/$LOCAL_PATH" ;;   # relative -> resolves inside the kernel, refused below
-    esac
-    if [ -e "$LOCAL_PATH" ]; then
-        RESOLVED="$(cd "$LOCAL_PATH" && pwd -P)"
+        if [ -z "$APP_REPO" ]; then
+            KERNEL_SELF=1
+            LOCAL_PATH="$KERNEL_ROOT"
+        else
+            echo "[local mount] roster has no app.local_path — run 'just local scaffold' or add local_path: to the app: block" >&2
+            exit 1
+        fi
     else
-        RESOLVED="$LOCAL_PATH"
+        LOCAL_PATH="${APP_LOCAL/#\~/$HOME}"
+        case "$LOCAL_PATH" in
+            /*) ;;
+            *)  LOCAL_PATH="$KERNEL_ROOT/$LOCAL_PATH" ;;   # relative -> resolves inside the kernel, refused below
+        esac
+        if [ -e "$LOCAL_PATH" ]; then
+            RESOLVED="$(cd "$LOCAL_PATH" && pwd -P)"
+        else
+            RESOLVED="$LOCAL_PATH"
+        fi
+        case "$RESOLVED" in
+            "$KERNEL_ROOT"|"$KERNEL_ROOT"/*)
+                echo "[local mount] app.local_path '$LOCAL_PATH' is inside the kernel tree '$KERNEL_ROOT' — the kernel is never the payload of an app run; point local_path at a clone OUTSIDE the kernel" >&2
+                exit 1 ;;
+        esac
     fi
-    case "$RESOLVED" in
-        "$KERNEL_ROOT"|"$KERNEL_ROOT"/*)
-            echo "[local mount] app.local_path '$LOCAL_PATH' is inside the kernel tree '$KERNEL_ROOT' — the kernel is never the payload of an app run; point local_path at a clone OUTSIDE the kernel" >&2
-            exit 1 ;;
-    esac
 
-    # ── clone-if-missing: payload_root only resolves; MOUNT does the cloning ──
-    if ! git -C "$LOCAL_PATH" rev-parse --git-dir >/dev/null 2>&1; then
+    # ── clone-if-missing: payload_root only resolves; MOUNT does the cloning.
+    # Kernel-self skips this: the kernel root is already a git repo. ──────────
+    if [ "$KERNEL_SELF" = 0 ] && ! git -C "$LOCAL_PATH" rev-parse --git-dir >/dev/null 2>&1; then
         if [ -z "$APP_REPO" ]; then
             echo "[local mount] app.local_path '$LOCAL_PATH' is not a git repo and app.repo is unset — nothing to clone from" >&2
             exit 1
@@ -112,8 +129,9 @@ mount RUN_ID:
         fi
     fi
 
-    # ── validate: manifest present, working tree clean ────────────────────────
-    if [ ! -f "$LOCAL_PATH/$APP_MANIFEST" ]; then
+    # ── validate: manifest present, working tree clean. The kernel root carries
+    # no sssf.app.yaml — skip the manifest check in kernel-self mode. ─────────
+    if [ "$KERNEL_SELF" = 0 ] && [ ! -f "$LOCAL_PATH/$APP_MANIFEST" ]; then
         echo "[local mount] manifest '$APP_MANIFEST' missing at $LOCAL_PATH/$APP_MANIFEST — the app is not sssf-armed" >&2
         exit 1
     fi
@@ -124,10 +142,11 @@ mount RUN_ID:
     # ── state-root arming: gitignore sssf/ so per-app run state (records, db,
     # sessions, artifacts) never dirties the clone. Idempotent — a second mount
     # is a no-op. Done BEFORE the clean-tree check; the appended line is the ONE
-    # allowed dirty change, committed on the run branch below.
+    # allowed dirty change, committed on the run branch below. Kernel-self
+    # skips it: its state stays in kernel-owned .sandbox/ + adws/adw_data/.
     ARMED=0
     GI="$LOCAL_PATH/.gitignore"
-    if ! { [ -f "$GI" ] && grep -qx 'sssf/' "$GI"; }; then
+    if [ "$KERNEL_SELF" = 0 ] && ! { [ -f "$GI" ] && grep -qx 'sssf/' "$GI"; }; then
         printf '\n# sssf runtime state (state-root re-homing)\nsssf/\n' >> "$GI"
         ARMED=1
     fi
@@ -180,8 +199,13 @@ mount RUN_ID:
         commit_sha="$(git -C "$LOCAL_PATH" rev-parse HEAD)" \
         factory_sha="$(git rev-parse HEAD)"
 
+    if [ "$KERNEL_SELF" = 1 ]; then
+        PAYLOAD_LABEL="$LOCAL_PATH (kernel-self, vendored)"
+    else
+        PAYLOAD_LABEL="$LOCAL_PATH"
+    fi
     printf '\nmounted: %s (local)\n  payload: %s\n  branch:  %s\n  execute: just local execute %s sdlc "<prompt>"\n  ui:      just local ui\n  doctor:  just local doctor\n' \
-        "{{RUN_ID}}" "$LOCAL_PATH" "$BRANCH" "{{RUN_ID}}"
+        "{{RUN_ID}}" "$PAYLOAD_LABEL" "$BRANCH" "{{RUN_ID}}"
 
 # run the chosen chain host-side, FOREGROUND, against the local clone.
 # GitHub-issue hooks wrap it exactly like the sandbox lane (issue opens before,
@@ -201,19 +225,29 @@ execute RUN_ID CHAIN PROMPT:
     fi
 
     # Resolve the payload the same way mount did; the pushed run branch is proof
-    # the clone is armed and on the right branch.
+    # the clone is armed and on the right branch. Neither app.local_path nor
+    # app.repo -> vendored kernel-self: the payload is THIS kernel tree.
     ROSTER=$(sandbox_mount/host/require_sssf_config.sh)
     export SSSF_CONFIG="$ROSTER"
+    APP_REPO=$(awk '
+      /^app:[[:space:]]*$/      { a=1; next }
+      /^[^[:space:]]/           { a=0 }
+      a && /^[[:space:]]+repo:[[:space:]]/ { print $2; exit }
+    ' "$ROSTER")
     APP_LOCAL=$(awk '
       /^app:[[:space:]]*$/      { a=1; next }
       /^[^[:space:]]/           { a=0 }
       a && /^[[:space:]]+local_path:[[:space:]]/ { print $2; exit }
     ' "$ROSTER")
-    LOCAL_PATH="${APP_LOCAL/#\~/$HOME}"
-    case "$LOCAL_PATH" in
-        /*) ;;
-        *)  LOCAL_PATH="$(pwd -P)/$LOCAL_PATH" ;;
-    esac
+    if [ -z "$APP_LOCAL" ] && [ -z "$APP_REPO" ]; then
+        LOCAL_PATH="$(pwd -P)"
+    else
+        LOCAL_PATH="${APP_LOCAL/#\~/$HOME}"
+        case "$LOCAL_PATH" in
+            /*) ;;
+            *)  LOCAL_PATH="$(pwd -P)/$LOCAL_PATH" ;;
+        esac
+    fi
     BRANCH="local/{{RUN_ID}}"
     CUR=$(git -C "$LOCAL_PATH" branch --show-current 2>/dev/null || true)
     if [ "$CUR" != "$BRANCH" ]; then
@@ -262,6 +296,7 @@ close RUN_ID:
     # SSSF_CONFIG is REQUIRED — the shared guard prints THE named error and exits.
     ROSTER=$(sandbox_mount/host/require_sssf_config.sh)
     export SSSF_CONFIG="$ROSTER"
+    KERNEL_ROOT="$(pwd -P)"
 
     if [ "{{RUN_ID}}" = "--all" ]; then
         # Bulk-close every OPEN local record. `list` merges the state root AND
@@ -309,7 +344,11 @@ close RUN_ID:
       /^[^[:space:]]/           { a=0 }
       a && /^[[:space:]]+local_path:[[:space:]]/ { print $2; exit }
     ' "$ROSTER")
-    LOCAL_PATH="${APP_LOCAL/#\~/$HOME}"
+    if [ -z "$APP_LOCAL" ] && [ -z "$APP_REPO" ]; then
+        LOCAL_PATH="$KERNEL_ROOT"   # kernel-self vendored: payload is this tree
+    else
+        LOCAL_PATH="${APP_LOCAL/#\~/$HOME}"
+    fi
     BRANCH="local/{{RUN_ID}}"
     SURVIVING=""
     if [ -n "$LOCAL_PATH" ] && git -C "$LOCAL_PATH" rev-parse --git-dir >/dev/null 2>&1; then
@@ -393,8 +432,12 @@ doctor:
     ' "$ROSTER")
     LOCAL_PATH="${APP_LOCAL/#\~/$HOME}"
     if [ -z "$LOCAL_PATH" ]; then
-        printf '  FAIL  app.local_path set — run '\''just local scaffold'\'' or add local_path: to the app: block\n'
-        ok=1
+        if [ -z "$APP_REPO" ]; then
+            printf '  ok    kernel-self (vendored) — payload is this tree\n'
+        else
+            printf '  FAIL  app.local_path set — run '\''just local scaffold'\'' or add local_path: to the app: block\n'
+            ok=1
+        fi
     else
         case "$LOCAL_PATH" in /*) ;; *) LOCAL_PATH="$(pwd -P)/$LOCAL_PATH" ;; esac
         if git -C "$LOCAL_PATH" rev-parse --git-dir >/dev/null 2>&1; then

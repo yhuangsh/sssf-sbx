@@ -18,14 +18,16 @@
 # host env (no SendEnv), so nothing from .env leaks over.
 #
 # SESSION TRACKING (GitHub issues). When issues are enabled (SSSF_ISSUES != '0',
-# default on) and the roster is TARGET mode (app.repo set), execute opens one
-# issue per run in the app's own repo BEFORE the SDLC is launched — title = the
-# instruction verbatim, label sssf:running — and spawns a detached HOST watcher
-# that adds one milestone comment mid-run and closes the issue with the full
-# audit record when the session ends. `gh` runs on the host only; the VM never
-# sees a GitHub credential. SSSF_ISSUES=0 disables it; a roster with no app.repo
-# (vendored mode) skips with a named message. Every tracker call is best-effort:
-# it warns and never fails the execute.
+# default on) execute opens one issue per run BEFORE the SDLC is launched —
+# title = the instruction verbatim, label sssf:running — and spawns a detached
+# HOST watcher that adds one milestone comment mid-run and closes the issue with
+# the full audit record when the session ends. `gh` runs on the host only; the
+# VM never sees a GitHub credential. The TARGET comes from the roster's
+# app.repo, or — vendored mode (no app.repo) — from THIS kernel's own github.com
+# origin (label sssf:kernel). The tracker owns that decision and the named skips
+# (no origin / not github.com / unauthenticated gh); SSSF_ISSUES=0 is the only
+# host-side skip. Every tracker call is best-effort: it warns and never fails
+# the execute.
 
 # usage: just sbx lifecycle execute <run-id> "add a word-count badge to the editor footer"
 #        just sbx lifecycle execute <run-id> prompts/06-redesign-quiet-room.md adws/adw_sssf_config/sssf.frontier.config.yaml
@@ -87,9 +89,10 @@ execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA:
     echo "→ roster: $CONFIG"
 
     # ── issue tracking (best-effort; never fails the execute) ────────────────
-    # Decide once, here, whether this run gets an issue: disabled entirely by
-    # SSSF_ISSUES=0, or skipped in vendored mode (no app.repo — there is no
-    # separate app repo to file into). Both are named skips, not failures.
+    # SSSF_ISSUES=0 is the ONLY host-side skip. Everything else — including the
+    # vendored/kernel-self decision and the no-origin / not-github.com / no-auth
+    # named skips — lives in the tracker: in vendored mode it resolves THIS
+    # kernel repo's github.com origin and files under sssf:kernel.
     TRACKER="{{justfile_directory()}}/sandbox_mount/host/issue_tracker.py"
     ISSUES_ON=1
     SINCE=""
@@ -97,31 +100,16 @@ execute RUN_ID PROMPT CONFIG="" ADW="sdlc" *EXTRA:
         ISSUES_ON=0
         echo "→ issues: disabled (SSSF_ISSUES=0) — skipping issue tracking"
     else
-        # Prefer the HOST roster when SSSF_CONFIG is set (the usual case); else
-        # read the per-sandbox copy FILL shipped. Same app: block awk as
-        # mount/fill/teardown/harvest. Any failure here must not abort.
-        ROSTER_TEXT=""
-        if [ -n "${SSSF_CONFIG:-}" ] && [ -f "${SSSF_CONFIG}" ]; then
-            ROSTER_TEXT="$(cat "${SSSF_CONFIG}" 2>/dev/null || true)"
-        else
-            ROSTER_TEXT="$(ssh "$VM".exe.xyz "cat $(printf '%q' "$CONFIG")" 2>/dev/null || true)"
-        fi
-        APP_REPO_ISSUES="$(printf '%s\n' "$ROSTER_TEXT" | awk '
-          /^app:[[:space:]]*$/ { a=1; next }
-          /^[^[:space:]]/      { a=0 }
-          a && /^[[:space:]]+repo:[[:space:]]/ { print $2; exit }
-        ')"
-        if [ -z "$APP_REPO_ISSUES" ]; then
-            ISSUES_ON=0
-            echo "→ issues: vendored mode (no app.repo) — skipping issue tracking"
-        fi
-    fi
-    if [ "$ISSUES_ON" = 1 ]; then
         # Captured BEFORE launch: the watcher matches the session it watches by
         # started_at >= since, because the adw_id does not exist yet.
         SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
         uv run "$TRACKER" open {{RUN_ID}} --instruction "$PROMPT" --chain "{{ADW}}" \
             || echo "!! issue open failed (best-effort) — continuing without it" >&2
+        # The tracker may have named-skipped (no github.com origin, or
+        # unauthenticated gh) — then there is no issue to watch.
+        if [ -z "$("$RR" get {{RUN_ID}} issue_number 2>/dev/null)" ]; then
+            ISSUES_ON=0
+        fi
     fi
 
     # All three detachment pieces are mandatory or ssh never returns: nohup

@@ -20,11 +20,15 @@ Usage:
     issue_tracker.py sync
 
 Everything is best-effort: a tracker failure warns and exits 0 so it can never
-fail a mount/execute/teardown. `SSSF_ISSUES=0` disables the feature entirely;
-a roster with no `app.repo` (vendored mode) skips with a named message because
-there is no separate app repo to file into. Issue bodies are redacted against
-every host env value whose NAME looks like a secret — the belt to the suspenders
-of never assembling content from `.env` in the first place.
+fail a mount/execute/teardown. `SSSF_ISSUES=0` disables the feature entirely.
+
+Issue-target resolution: the roster's `app.repo` wins (target mode). With no
+`app.repo` (vendored mode) the run is KERNEL-SELF — the payload is this repo, so
+issues file into THIS kernel's own github.com origin, labeled `sssf:kernel`. A
+named skip (exit 0, the old behaviour) covers a missing `origin`, an origin that
+is not github.com, and an unauthenticated `gh`. Issue bodies are redacted
+against every host env value whose NAME looks like a secret — the belt to the
+suspenders of never assembling content from `.env` in the first place.
 
 The script is a PEP-723 uv script (pyyaml only) and reuses run_record.py, the
 one state file shared across the six sandbox phases, as its store — the tracker
@@ -103,6 +107,7 @@ LABELS = {
     "sssf:cancelled": ("fbca04", "SSSF session torn down mid-run"),
     "sssf:follow-up": ("5319e7", "SSSF re-run of a failed session"),
     "sssf:local":     ("0075ca", "SSSF session ran on the host (local mode)"),
+    "sssf:kernel":    ("8250df", "SSSF kernel self-development run (vendored mode)"),
     "sssf:merged-broken": ("d93f0b", "SSSF merge passed textually but broke the checks"),
 }
 
@@ -217,6 +222,46 @@ def _repo_from_record(rec: dict | None) -> str:
     if not rec:
         return ""
     return _repo_from_url(rec.get("issue_url"))
+
+
+def _parse_github_origin(url: str) -> str:
+    """'owner/name' from a github.com remote URL (https or ssh), else ''.
+
+    Pure by design: the non-github named skip is demonstrable in a throwaway
+    clone without ever editing this repo's own `origin`."""
+    m = re.match(r"^(?:https://github\.com/|git@github\.com:)([^/]+)/([^/]+?)(?:\.git)?/?$",
+                 (url or "").strip())
+    return f"{m.group(1)}/{m.group(2)}" if m else ""
+
+
+def _kernel_origin_repo() -> tuple[str, str]:
+    """(repo, skip_reason): this repo's `origin` as owner/name when it is a
+    github.com remote; else ('', reason) for the named vendored skip."""
+    try:
+        r = subprocess.run(["git", "remote", "get-url", "origin"],
+                           capture_output=True, text=True, cwd=REPO_ROOT)
+    except FileNotFoundError:
+        return "", "git is not on PATH"
+    url = (r.stdout or "").strip()
+    if r.returncode != 0 or not url:
+        return "", "this repo has no 'origin' remote"
+    repo = _parse_github_origin(url)
+    if not repo:
+        return "", f"origin '{url}' is not a github.com remote"
+    return repo, ""
+
+
+def _is_kernel(rec: dict | None) -> bool:
+    """True when this run's issue target IS this kernel repo — a vendored
+    kernel-self run. Best-effort: False on any error."""
+    try:
+        rec_repo = _repo_from_record(rec)
+        if not rec_repo:
+            return False
+        kernel, _ = _kernel_origin_repo()
+        return bool(kernel) and _parse_github_origin(rec_repo) == kernel
+    except Exception:
+        return False
 
 
 # ── roster resolution ───────────────────────────────────────────────────────
@@ -448,6 +493,14 @@ def _commits(run_id: str, rec: dict | None) -> list[str]:
                                 f"{base}..HEAD"], capture_output=True, text=True)
             if r.returncode == 0:
                 return [l for l in r.stdout.splitlines() if l.strip()]
+            return []
+        if _is_kernel(rec):
+            # Kernel-self vendored: the payload is this repo; the run branch
+            # local/<run-id> lives HERE, not in a separate app clone.
+            r = subprocess.run(["git", "-C", str(REPO_ROOT), "log", "--format=%h %s",
+                                f"{base}..HEAD"], capture_output=True, text=True)
+            if r.returncode == 0:
+                return [l for l in r.stdout.splitlines() if l.strip()]
         return []
     vm = rec.get("vm_name")
     if vm:
@@ -482,8 +535,11 @@ def _commits(run_id: str, rec: dict | None) -> list[str]:
 
 
 def _harvest_status(run_id: str, rec: dict | None, commits: list[str],
-                    local: bool = False) -> str:
+                    local: bool = False, kernel: bool = False) -> str:
     if local:
+        if kernel:
+            return (f"kernel-self (vendored) — commits are on branch `local/{run_id}` "
+                    "in this kernel repo (no bundle); push when ready")
         payload = _local_path_quiet() or "<local_path>"
         return (f"local mode — commits are on branch `local/{run_id}` in `{payload}`; "
                 "push when ready (no bundle)")
@@ -600,8 +656,25 @@ def _fmt_gates(gates: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _provenance_rows(rec: dict, chain: str | None, local: bool = False) -> str:
-    if local:
+def _provenance_rows(rec: dict, chain: str | None, local: bool = False,
+                     kernel: bool = False) -> str:
+    if kernel:
+        # Kernel-self wins over local when both: the payload is THIS repo. No VM
+        # fields and no app payload path — the kernel root is the payload.
+        rows = [
+            ("run id", rec.get("run_id")),
+            ("mode", "vendored (kernel-self — the payload is this repo)"),
+        ]
+        if local:
+            rows.append(("lane", "host (just local)"))
+        rows += [
+            ("roster", _roster_name()),
+            ("factory sha", rec.get("factory_sha")),
+            ("kernel HEAD (base)", rec.get("commit_sha")),
+            ("chain", chain or "(filled at first update)"),
+            ("created", rec.get("created_at")),
+        ]
+    elif local:
         rows = [
             ("run id", rec.get("run_id")),
             ("roster", _roster_name()),
@@ -629,13 +702,14 @@ def _provenance_rows(rec: dict, chain: str | None, local: bool = False) -> str:
 
 
 def _open_body(rec: dict, instruction: str, chain: str | None, prev: int | None,
-               local: bool = False) -> str:
+               local: bool = False, kernel: bool = False) -> str:
     parts = []
     if prev:
         parts.append(f"> **Follow-up to #{prev}** — the previous session on this run "
                      f"record failed.")
     parts.append("## Instruction\n\n```text\n" + (instruction or "") + "\n```")
-    parts.append("## Provenance\n\n" + _provenance_rows(rec, chain, local=local))
+    parts.append("## Provenance\n\n" + _provenance_rows(rec, chain, local=local,
+                                                       kernel=kernel))
     return "\n\n".join(parts)
 
 
@@ -649,7 +723,8 @@ def _milestone_body(milestone: str, trace: dict) -> str:
             f"### Cost so far\n\n{_fmt_cost(session)}")
 
 
-def _failure_forensics(trace: dict, rec: dict, local: bool = False) -> str:
+def _failure_forensics(trace: dict, rec: dict, local: bool = False,
+                       kernel: bool = False) -> str:
     phases = trace.get("phases") or []
     failing = [p for p in phases if str(p.get("status")).lower() == "fail"]
     lines = ["### Failure forensics"]
@@ -666,7 +741,11 @@ def _failure_forensics(trace: dict, rec: dict, local: bool = False) -> str:
     lines.append("\n**gates:**\n\n" + _fmt_gates(trace.get("gates") or []))
     lines.append("\n**reviews:**\n\n" + _fmt_reviews(trace.get("envelopes") or []))
     state = rec.get("issue_state") or "failed"
-    if local:
+    if kernel:
+        lines.append(f"\n**surviving state:** the kernel repo tree on branch "
+                     f"`local/{rec.get('run_id')}` survives here (no VM); run record "
+                     f"state `{state}`.")
+    elif local:
         payload = _local_path_quiet() or "<local_path>"
         lines.append(f"\n**surviving state:** the payload clone at `{payload}` on branch "
                      f"`local/{rec.get('run_id')}` survives (no VM); run record state "
@@ -706,12 +785,14 @@ def _final_comment(outcome: str, note: str | None, rec: dict, trace: dict,
     session = trace.get("session") or {}
     phases = trace.get("phases") or []
     commits = trace.get("commits") or []
+    kernel = _is_kernel(rec)
     parts = [f"## Final outcome — `{outcome}`", f"_{_now()}_"]
     if outcome == "cancelled":
         parts.append(f"**State at teardown:** {note or 'cancelled at teardown'}")
     if outcome == "failed":
-        parts.append(_failure_forensics(trace, rec, local=local))
-    parts.append("### Provenance\n\n" + _provenance_rows(rec, session.get("adw_name"), local=local))
+        parts.append(_failure_forensics(trace, rec, local=local, kernel=kernel))
+    parts.append("### Provenance\n\n" + _provenance_rows(
+        rec, session.get("adw_name"), local=local, kernel=kernel))
     parts.append("### Phase timeline\n\n" + _fmt_phase_list(phases))
     parts.append("### Review verdicts\n\n" + _fmt_reviews(trace.get("envelopes") or []))
     parts.append("### Commits (BASE..HEAD)\n\n" + _fmt_commits(commits))
@@ -719,7 +800,7 @@ def _final_comment(outcome: str, note: str | None, rec: dict, trace: dict,
     parts.append("### Outcome reason (verbatim)\n\n```text\n"
                  + _outcome_reason(outcome, note, trace) + "\n```")
     parts.append("### Harvest status\n\n" + _harvest_status(rec.get("run_id"), rec, commits,
-                                                             local=local))
+                                                             local=local, kernel=kernel))
     parts.append("### Trace source\n\n`" + str(trace.get("source") or "none") + "`")
     if rec.get("prev_issue_number"):
         parts.append(f"### Follow-up\n\nFollow-up to #{rec.get('prev_issue_number')}")
@@ -743,9 +824,17 @@ def cmd_open(args: argparse.Namespace) -> int:
         repo, _, _ = _app_config()
     except RuntimeError as e:
         die(str(e))
+    # Vendored mode (no app.repo) is kernel-self: the payload is THIS repo, so
+    # file into this repo's own github.com origin. No origin / not github.com is
+    # a named skip; the gh-auth named skip below covers unauthenticated hosts.
+    kernel = False
     if not repo:
-        print("issues: vendored mode — roster has no app.repo; skipping issue tracking")
-        return 0
+        repo, reason = _kernel_origin_repo()
+        if not repo:
+            print(f"issues: vendored mode (kernel-self) — {reason}; "
+                  "skipping issue tracking")
+            return 0
+        kernel = True
     if not gh_auth_ok():
         warn("gh is not authenticated on this host — skipping issue tracking")
         return 0
@@ -766,11 +855,14 @@ def cmd_open(args: argparse.Namespace) -> int:
     title = " ".join(instruction.split()) or f"SSSF session {args.run_id}"
     if len(title) > 200:
         title = title[:199].rstrip() + "…"
-    body = redact(_open_body(rec, instruction, args.chain, prev, local=local))
+    body = redact(_open_body(rec, instruction, args.chain, prev, local=local,
+                             kernel=kernel))
     argv = ["issue", "create", "--repo", repo, "--title", title, "--body", body,
             "--label", "sssf:running"]
     if local:
         argv += ["--label", "sssf:local"]
+    if kernel:
+        argv += ["--label", "sssf:kernel"]
     if prev:
         argv += ["--label", "sssf:follow-up"]
     r = gh(argv)
