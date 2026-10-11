@@ -594,3 +594,5 @@ GitHub origin (`yhuangsh/sssf-sbx`), labeled **`sssf:kernel`** — the project's
 public development log. Same open → milestone → close lifecycle as any run; see
 [Session tracking](#session-tracking-github-issues) above. `SSSF_ISSUES=0` still
 disables it, and a non-github.com origin or missing `gh` auth is a named skip.
+Kernel-self run issues are public by design — they are this project's
+development log.
